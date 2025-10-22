@@ -6,13 +6,28 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 )
+
+//---------------
+// USER
+//---------------
+
+// userSession persists on disconnects 
+type UserSession struct {
+	userID 		string
+	lastRoom	string
+	lastSeen 	time.Time
+	rateLimiter 	*rate.Limiter
+	color		string
+}
 type User struct {
 	id		string
+	session 	*UserSession
 	connection 	*websocket.Conn
-	color		string
-	lastCursorTime 	time.Time
 }
+
+
 
 type DrawingObject struct {
 	ID 	string			`json:"id"`
@@ -22,12 +37,17 @@ type DrawingObject struct {
 	Zindex  int 			`json:"zIndex"`
 }
 
+//---------------
+// ROOM 
+//---------------
 type Room struct {
 	connections     []*User
 	objects         map[string]*DrawingObject
 	lastActive	time.Time
+	createdAt	time.Time
 	mu 		sync.RWMutex
 }
+
 
 // join: adds user to room, sends existing drawings
 func (r *Room) join(u *User) {
@@ -103,3 +123,72 @@ func (r *Room) broadcast(msg []byte, sender *websocket.Conn) {
 	}
 }
 
+//------------------
+// RateLimit Struct 
+//------------------
+type RateLimit struct {
+	maxRoomSize 		int
+	maxObjects 		int
+	maxMessageSize		int
+	maxRooms 		int
+	messagesPerSecond 	float64
+	burstSize 		int
+}
+
+type IPRateLimit struct {
+	Limiters	map[string]*rate.Limiter
+	mu 		sync.RWMutex
+}
+
+// CanCreateRoom: Check if server can accept more rooms
+func (rl *RateLimit) CanCreateRoom(currentRoomCount int) bool {
+	return currentRoomCount < rl.maxRooms
+}
+
+// CanAddObject: Check if room has space for more objects
+func (rl *RateLimit) CanAddObject(room *Room) bool {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	return len(room.objects) < rl.maxObjects
+}
+
+// CanJoinRoom: Check if room has space for more users
+func (rl *RateLimit) CanJoinRoom(room *Room) bool {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	return len(room.connections) < rl.maxRoomSize
+}
+
+// ValidateMessageSize: Check if message is within size limit
+func (rl *RateLimit) ValidateMessageSize(msgSize int) bool {
+	return msgSize <= rl.maxMessageSize
+}
+
+//------------------
+// IP Rate Limiting
+//------------------
+
+// Allow: Check if IP is allowed to make a request
+func (iprl *IPRateLimit) Allow(ip string) bool {
+	iprl.mu.Lock()
+	defer iprl.mu.Unlock()
+
+	limiter, exists := iprl.Limiters[ip]
+	if !exists {
+		// New IP: 10 connections per minute, burst of 5
+		limiter = rate.NewLimiter(rate.Every(6*time.Second), 5)
+		iprl.Limiters[ip] = limiter
+	}
+
+	return limiter.Allow()
+}
+
+// Cleanup: Remove old IP limiters (call periodically)
+func (iprl *IPRateLimit) Cleanup() {
+	iprl.mu.Lock()
+	defer iprl.mu.Unlock()
+
+	// Clear all limiters (they'll be recreated on demand)
+	// In production, you'd track last use time and only remove old ones
+	iprl.Limiters = make(map[string]*rate.Limiter)
+}
