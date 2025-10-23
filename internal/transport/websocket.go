@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"main/internal/domain"
 	"main/internal/handlers"
 	"main/internal/middleware"
+	"main/internal/room"
+	"main/internal/user"
 
 	"github.com/gorilla/websocket"
 )
@@ -57,7 +58,7 @@ func GetClientIP(r *http.Request) string {
 }
 
 // HandleWebSocket upgrades HTTP to WebSocket and joins the room
-func HandleWebSocket(w http.ResponseWriter, r *http.Request, ipRateLimiter *middleware.IPRateLimit, config *middleware.RateLimit) {
+func HandleWebSocket(w http.ResponseWriter, r *http.Request, ipRateLimiter *middleware.IPRateLimit, config *middleware.RateLimit, sessionMgr *user.SessionManager) {
 	// Check if rate limited
 	clientIP := GetClientIP(r)
 	if !ipRateLimiter.Allow(clientIP) {
@@ -109,15 +110,15 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, ipRateLimiter *midd
 	// Get or generate userID
 	userID := authMsg.UserID
 	if userID == "" {
-		userID = domain.GenerateUUID()
+		userID = user.GenerateUUID()
 	}
 
 	// Get session or create a new one
-	session := domain.GetOrCreateSession(userID)
+	session := sessionMgr.GetOrCreate(userID)
 	session.LastRoom = roomCode // Track last room for resumption
 
 	// Create user with session
-	u := &domain.User{
+	u := &user.User{
 		ID:         userID,
 		Session:    session,
 		Connection: conn,
@@ -133,17 +134,17 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, ipRateLimiter *midd
 	conn.WriteMessage(websocket.TextMessage, responseMsg)
 
 	// Join room
-	var room *domain.Room
+	var rm *room.Room
 
 	// Check if user is rejoining their last room and it still exists
 	if session.LastRoom == roomCode {
-		if existingRoom, active := domain.GetRoomIfActive(roomCode); active {
-			room = existingRoom
-			room.Join(u)
+		if existingRoom, active := room.GetRoomIfActive(roomCode); active {
+			rm = existingRoom
+			rm.Join(u, config.MaxRoomSize)
 			log.Printf("User %s rejoined room %s", userID, roomCode)
 		} else {
 			// Room expired, make new
-			room, err = domain.JoinRoom(roomCode, u, config.MaxRooms, config.MaxRoomSize)
+			rm, err = room.JoinRoom(roomCode, u, config.MaxRooms, config.MaxRoomSize)
 			if err != nil {
 				log.Printf("Error: Connection to room (%s) - %v", roomCode, err)
 				return
@@ -151,40 +152,40 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, ipRateLimiter *midd
 		}
 	} else {
 		// Joining a different room or first time
-		room, err = domain.JoinRoom(roomCode, u, config.MaxRooms, config.MaxRoomSize)
+		rm, err = room.JoinRoom(roomCode, u, config.MaxRooms, config.MaxRoomSize)
 		if err != nil {
 			log.Printf("Error: Connection to room (%s) - %v", roomCode, err)
 			return
 		}
 	}
 
-	run(conn, room, u, config)
+	run(conn, rm, u, config, sessionMgr)
 }
 
 // run handles the message loop for WebSocket connections
-func run(conn *websocket.Conn, room *domain.Room, user *domain.User, config *middleware.RateLimit) {
+func run(conn *websocket.Conn, rm *room.Room, u *user.User, config *middleware.RateLimit, sessionMgr *user.SessionManager) {
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("Error: Reading message", err)
-			room.Leave(user)
+			rm.Leave(u)
 			break // Connection dead
 		}
 
 		// Validate message size
 		if !config.ValidateMessageSize(len(msg)) {
-			log.Printf("Message too large from user %s: %d bytes", user.ID, len(msg))
+			log.Printf("Message too large from user %s: %d bytes", u.ID, len(msg))
 			continue // Drop oversized message
 		}
 
 		// Check rate limit from session
-		if !user.Session.RateLimiter.Allow() {
-			log.Printf("Rate limit exceeded for user: %s", user.ID)
+		if !u.Session.RateLimiter.Allow() {
+			log.Printf("Rate limit exceeded for user: %s", u.ID)
 			continue // Drop message
 		}
 
-		if err := handlers.HandleMessage(room, user, msg, config); err != nil {
-			log.Printf("Error handling message from user %s: %v", user.ID, err)
+		if err := handlers.HandleMessage(rm, u, msg, config, sessionMgr); err != nil {
+			log.Printf("Error handling message from user %s: %v", u.ID, err)
 			continue // Skip message
 		}
 	}

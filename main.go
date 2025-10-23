@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"main/internal/domain"
 	"main/internal/middleware"
+	"main/internal/room"
 	"main/internal/transport"
+	"main/internal/user"
 
 	"github.com/joho/godotenv"
 )
@@ -30,16 +31,17 @@ func main() {
 	)
 
 	ipRateLimiter := middleware.NewIPRateLimit()
+	sessionMgr := user.NewSessionManager()
 
 	// Setup HTTP handlers
 	http.Handle("/", http.FileServer(http.Dir("./frontend")))
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		transport.HandleWebSocket(w, r, ipRateLimiter, config)
+		transport.HandleWebSocket(w, r, ipRateLimiter, config, sessionMgr)
 	})
 
 	// Start periodic cleanups
 	go cleanupRooms(ctx)
-	go cleanupSessions(ctx)
+	go cleanupSessions(ctx, sessionMgr)
 	go cleanupIPLimiters(ctx, ipRateLimiter)
 
 	// Run server
@@ -60,14 +62,14 @@ func cleanupRooms(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			domain.CleanupRooms()
+			room.Cleanup()
 			log.Println("Cleaned up expired rooms")
 		}
 	}
 }
 
 // cleanupSessions periodically removes expired user sessions
-func cleanupSessions(ctx context.Context) {
+func cleanupSessions(ctx context.Context, sessionMgr *user.SessionManager) {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 
@@ -76,7 +78,7 @@ func cleanupSessions(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			domain.CleanupSessions()
+			sessionMgr.Cleanup()
 			log.Println("Cleaned up expired sessions")
 		}
 	}

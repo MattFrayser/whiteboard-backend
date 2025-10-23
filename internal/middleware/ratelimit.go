@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"main/internal/domain"
+	"main/internal/room"
 
 	"golang.org/x/time/rate"
 )
@@ -19,9 +19,15 @@ type RateLimit struct {
 	BurstSize         int
 }
 
+// ipLimiterEntry tracks a rate limiter and its last use time
+type ipLimiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 // IPRateLimit manages rate limiters per IP address
 type IPRateLimit struct {
-	Limiters map[string]*rate.Limiter
+	limiters map[string]*ipLimiterEntry
 	mu       sync.RWMutex
 }
 
@@ -40,13 +46,13 @@ func NewRateLimit(maxRoomSize, maxObjects, maxMessageSize, maxRooms int, message
 // NewIPRateLimit creates a new IPRateLimit
 func NewIPRateLimit() *IPRateLimit {
 	return &IPRateLimit{
-		Limiters: make(map[string]*rate.Limiter),
+		limiters: make(map[string]*ipLimiterEntry),
 	}
 }
 
 // CanAddObject checks if a room has space for more objects
-func (rl *RateLimit) CanAddObject(room *domain.Room) bool {
-	return room.GetObjectCount() < rl.MaxObjects
+func (rl *RateLimit) CanAddObject(rm *room.Room) bool {
+	return rm.GetObjectCount() < rl.MaxObjects
 }
 
 // ValidateMessageSize checks if a message is within the size limit
@@ -59,22 +65,33 @@ func (iprl *IPRateLimit) Allow(ip string) bool {
 	iprl.mu.Lock()
 	defer iprl.mu.Unlock()
 
-	limiter, exists := iprl.Limiters[ip]
+	entry, exists := iprl.limiters[ip]
 	if !exists {
 		// New IP: 10 connections per minute, burst of 5
-		limiter = rate.NewLimiter(rate.Every(6*time.Second), 5)
-		iprl.Limiters[ip] = limiter
+		entry = &ipLimiterEntry{
+			limiter:  rate.NewLimiter(rate.Every(6*time.Second), 5),
+			lastSeen: time.Now(),
+		}
+		iprl.limiters[ip] = entry
+	} else {
+		// Update last seen time
+		entry.lastSeen = time.Now()
 	}
 
-	return limiter.Allow()
+	return entry.limiter.Allow()
 }
 
-// Cleanup removes old IP limiters
+// Cleanup removes old IP limiters that haven't been used recently
 func (iprl *IPRateLimit) Cleanup() {
 	iprl.mu.Lock()
 	defer iprl.mu.Unlock()
 
-	// Clear all limiters (they'll be recreated on demand)
-	// In production, you'd track last use time and only remove old ones
-	iprl.Limiters = make(map[string]*rate.Limiter)
+	now := time.Now()
+	threshold := 1 * time.Hour
+
+	for ip, entry := range iprl.limiters {
+		if now.Sub(entry.lastSeen) > threshold {
+			delete(iprl.limiters, ip)
+		}
+	}
 }

@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"time"
 
-	"main/internal/domain"
 	"main/internal/middleware"
+	"main/internal/room"
+	"main/internal/user"
 
 	"github.com/gorilla/websocket"
 )
 
 // HandleMessage routes messages to appropriate handlers based on message type
-func HandleMessage(room *domain.Room, user *domain.User, msg []byte, config *middleware.RateLimit) error {
+func HandleMessage(rm *room.Room, u *user.User, msg []byte, config *middleware.RateLimit, sessionMgr *user.SessionManager) error {
 	var data map[string]interface{}
 	if err := json.Unmarshal(msg, &data); err != nil {
 		return fmt.Errorf("unmarshal base message: %w", err)
@@ -25,25 +26,25 @@ func HandleMessage(room *domain.Room, user *domain.User, msg []byte, config *mid
 
 	switch messageType {
 	case "getUserId":
-		return handleGetUserID(user)
+		return handleGetUserID(u)
 	case "objectAdded":
-		return handleObjectAdded(room, user, data, config)
+		return handleObjectAdded(rm, u, data, config)
 	case "objectUpdated":
-		return handleObjectUpdated(room, user, data)
+		return handleObjectUpdated(rm, u, data)
 	case "objectDeleted":
-		return handleObjectDeleted(room, user, data)
+		return handleObjectDeleted(rm, u, data)
 	case "cursor":
-		return handleCursor(room, user, data)
+		return handleCursor(rm, u, data, sessionMgr)
 	default:
 		return fmt.Errorf("unknown message type: %s", messageType)
 	}
 }
 
 // handleGetUserID returns the user ID
-func handleGetUserID(user *domain.User) error {
+func handleGetUserID(u *user.User) error {
 	response := map[string]interface{}{
 		"type":   "userId",
-		"userId": user.ID,
+		"userId": u.ID,
 	}
 
 	responseMsg, err := json.Marshal(response)
@@ -51,13 +52,13 @@ func handleGetUserID(user *domain.User) error {
 		return fmt.Errorf("marshal user ID response: %w", err)
 	}
 
-	return user.Connection.WriteMessage(websocket.TextMessage, responseMsg)
+	return u.Connection.WriteMessage(websocket.TextMessage, responseMsg)
 }
 
 // handleObjectAdded adds an object to the room and broadcasts to other users
-func handleObjectAdded(room *domain.Room, user *domain.User, data map[string]interface{}, config *middleware.RateLimit) error {
+func handleObjectAdded(rm *room.Room, u *user.User, data map[string]interface{}, config *middleware.RateLimit) error {
 	// Check object limit before adding
-	if !config.CanAddObject(room) {
+	if !config.CanAddObject(rm) {
 		return fmt.Errorf("room at maximum object capacity")
 	}
 
@@ -87,29 +88,29 @@ func handleObjectAdded(room *domain.Room, user *domain.User, data map[string]int
 	}
 
 	// Create object
-	obj := &domain.DrawingObject{
+	obj := &room.DrawingObject{
 		ID:     id,
 		Type:   objType,
 		Data:   objData,
-		UserID: user.ID,
+		UserID: u.ID,
 		ZIndex: int(zIndexFloat),
 	}
 
 	// Add to room
-	room.AddObject(obj)
+	rm.AddObject(obj)
 
 	// Broadcast
-	data["userId"] = user.ID
+	data["userId"] = u.ID
 	msg, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal broadcast message: %w", err)
 	}
-	room.Broadcast(msg, user.Connection)
+	rm.Broadcast(msg, u.Connection)
 	return nil
 }
 
 // handleObjectUpdated updates object data and broadcasts
-func handleObjectUpdated(room *domain.Room, user *domain.User, data map[string]interface{}) error {
+func handleObjectUpdated(rm *room.Room, u *user.User, data map[string]interface{}) error {
 	object, ok := data["object"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("missing object data")
@@ -126,42 +127,42 @@ func handleObjectUpdated(room *domain.Room, user *domain.User, data map[string]i
 	}
 
 	// Update object in room
-	room.UpdateObject(id, objData)
+	rm.UpdateObject(id, objData)
 
 	// Broadcast
-	data["userId"] = user.ID
+	data["userId"] = u.ID
 	msg, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal broadcast message: %w", err)
 	}
-	room.Broadcast(msg, user.Connection)
+	rm.Broadcast(msg, u.Connection)
 	return nil
 }
 
 // handleObjectDeleted removes an object from the room and broadcasts
-func handleObjectDeleted(room *domain.Room, user *domain.User, data map[string]interface{}) error {
+func handleObjectDeleted(rm *room.Room, u *user.User, data map[string]interface{}) error {
 	objectID, ok := data["objectId"].(string)
 	if !ok {
 		return fmt.Errorf("missing objectId")
 	}
 
 	// Delete object from room
-	room.DeleteObject(objectID)
+	rm.DeleteObject(objectID)
 
 	// Broadcast
-	data["userId"] = user.ID
+	data["userId"] = u.ID
 	msg, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal broadcast message: %w", err)
 	}
-	room.Broadcast(msg, user.Connection)
+	rm.Broadcast(msg, u.Connection)
 	return nil
 }
 
 // handleCursor updates cursor position and broadcasts
-func handleCursor(room *domain.Room, user *domain.User, data map[string]interface{}) error {
+func handleCursor(rm *room.Room, u *user.User, data map[string]interface{}, sessionMgr *user.SessionManager) error {
 	now := time.Now()
-	lastTime, exists := domain.GetSessionLastSeen(user.ID)
+	lastTime, exists := sessionMgr.GetLastSeen(u.ID)
 	if !exists {
 		return fmt.Errorf("session not found")
 	}
@@ -171,16 +172,16 @@ func handleCursor(room *domain.Room, user *domain.User, data map[string]interfac
 		return nil // Ignore to throttle
 	}
 
-	domain.UpdateSessionLastSeen(user.ID, now)
+	sessionMgr.UpdateLastSeen(u.ID, now)
 
-	data["color"] = user.Session.Color
-	data["userId"] = user.ID
+	data["color"] = u.Session.Color
+	data["userId"] = u.ID
 
 	msg, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal cursor message: %w", err)
 	}
 
-	room.Broadcast(msg, user.Connection)
+	rm.Broadcast(msg, u.Connection)
 	return nil
 }
