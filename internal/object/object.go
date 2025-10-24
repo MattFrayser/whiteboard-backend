@@ -1,6 +1,6 @@
-package room
+package object 
 
-type DrawingObject struct {
+type Drawing struct {
 	ID     string                 `json:"id"`
 	Type   string                 `json:"type"`
 	Data   map[string]interface{} `json:"data"`

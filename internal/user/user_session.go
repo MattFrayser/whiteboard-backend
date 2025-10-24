@@ -21,7 +21,8 @@ func NewSessionManager() *SessionManager {
 }
 
 // GetOrCreate gets an existing session or creates a new one
-func (sm *SessionManager) GetOrCreate(userID string) *UserSession {
+// Accepts a color parameter for new sessions
+func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -31,12 +32,14 @@ func (sm *SessionManager) GetOrCreate(userID string) *UserSession {
 		return session
 	}
 
-	// Create new session with persistent color
+	// Create new session with provided color
+	now := time.Now()
 	session = &UserSession{
-		UserID:      userID,
-		LastSeen:    time.Now(),
-		RateLimiter: rate.NewLimiter(30, 10), // 30 msg/sec, burst of 10
-		Color:       getRandomHex(),
+		UserID:           userID,
+		LastSeen:         now,
+		LastCursorUpdate: time.Time{},
+		RateLimiter:      rate.NewLimiter(30, 10), // 30 msg/sec, burst of 10
+		Color:            color,
 	}
 	sm.sessions[userID] = session
 	return session
@@ -53,7 +56,7 @@ func (sm *SessionManager) UpdateLastSeen(userID string, lastSeen time.Time) {
 }
 
 // GetLastSeen gets the last seen time for a user session
-func (sm *SessionManager) GetLastSeen(userID string) (time.Time, bool) {
+func (sm *SessionManager) LastSeen(userID string) (time.Time, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -61,6 +64,27 @@ func (sm *SessionManager) GetLastSeen(userID string) (time.Time, bool) {
 		return session.LastSeen, true
 	}
 	return time.Time{}, false
+}
+
+// GetLastCursorUpdate gets the last cursor update time for a user session
+func (sm *SessionManager) LastCursorUpdate(userID string) (time.Time, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if session, exists := sm.sessions[userID]; exists {
+		return session.LastCursorUpdate, true
+	}
+	return time.Time{}, false
+}
+
+// UpdateLastCursorUpdate updates the last cursor update time for a user session
+func (sm *SessionManager) UpdateLastCursorUpdate(userID string, lastCursorUpdate time.Time) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if session, exists := sm.sessions[userID]; exists {
+		session.LastCursorUpdate = lastCursorUpdate
+	}
 }
 
 // Cleanup removes expired user sessions

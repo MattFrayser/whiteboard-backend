@@ -1,70 +1,46 @@
 package room 
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"main/internal/user"
-
-	"github.com/gorilla/websocket"
+	"main/internal/object"
 )
 
 // Room represents a collaborative whiteboard room
 type Room struct {
-	Connections map[string]*user.User
-	Objects     map[string]*DrawingObject
-	LastActive  time.Time
-	CreatedAt   time.Time
-	mu          sync.RWMutex
+	Connections    map[string]*user.User
+	Objects        map[string]*object.Drawing
+	UserColors     map[string]string // userID → color (room-specific)
+	colorGenerator *user.ColorGenerator
+	LastActive     time.Time
+	CreatedAt      time.Time
+	mu             sync.RWMutex
 }
 
 
-// Join adds a user to the room and sends existing drawings
-func (r *Room) Join(u *user.User, maxRoomSize int) error{
+// Join: adds user to room and assigns a unique color
+func (r *Room) Join(u *user.User, maxRoomSize int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Check room size limit atomically with addition
 	if len(r.Connections) >= maxRoomSize {
 		return errors.New("room is full")
 	}
 
-	// add user to room
 	r.Connections[u.ID] = u
 
-	// Sync all objects
-	objects := make([]map[string]interface{}, 0, len(r.Objects))
-	for _, obj := range r.Objects {
-		objects = append(objects, map[string]interface{}{
-			"id":     obj.ID,
-			"type":   obj.Type,
-			"data":   obj.Data,
-			"userId": obj.UserID,
-			"zIndex": obj.ZIndex,
-		})
-	}
-
-	syncMsg := map[string]interface{}{
-		"type":    "sync",
-		"objects": objects,
-	}
-
-	msgBytes, err := json.Marshal(syncMsg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal sync message: %w", err)
-	}
-
-	if err := u.Connection.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
-		return fmt.Errorf("failed to send sync message: %w", err)
+	// Assign color if user doesn't have one in this room yet
+	if _, hasColor := r.UserColors[u.ID]; !hasColor {
+		r.UserColors[u.ID] = r.colorGenerator.NextColor()
 	}
 
 	return nil
 }
 
-// Leave removes a user from the room
+// Leave: remove  user from room
 func (r *Room) Leave(u *user.User) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -74,30 +50,17 @@ func (r *Room) Leave(u *user.User) {
 	r.LastActive = time.Now()
 }
 
-// Broadcast sends a message to all users except the sender
-func (r *Room) Broadcast(msg []byte, sender *websocket.Conn) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 
-	for _, u := range r.Connections {
-		if u.Connection == sender {
-			continue
-		}
-
-		// Best-effort send; read loop handles any cleanup 
-		u.Connection.WriteMessage(websocket.TextMessage, msg)
-	}
-}
-
-// AddObject adds a drawing object to the room
-func (r *Room) AddObject(obj *DrawingObject) {
+// AddObject: adds drawing to room
+func (r *Room) AddObject(obj *object.Drawing) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.Objects[obj.ID] = obj
 	r.LastActive = time.Now()
 }
 
-// UpdateObject updates a drawing object in the room
+// UpdateObject: updates drawing in room
 func (r *Room) UpdateObject(id string, data map[string]interface{}) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -110,24 +73,64 @@ func (r *Room) UpdateObject(id string, data map[string]interface{}) bool {
 	return false
 }
 
-// DeleteObject removes a drawing object from the room
+// DeleteObject: removes drawing from room
 func (r *Room) DeleteObject(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	delete(r.Objects, id)
 	r.LastActive = time.Now()
 }
 
-// GetObjectCount returns the number of objects in the room
-func (r *Room) GetObjectCount() int {
+// GetObject: retrieves drawing from room (by ID)
+func (r *Room) GetObject(id string) *object.Drawing {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	return r.Objects[id]
+}
+
+// GetObjectCount: returns number of objects in room
+func (r *Room) ObjectCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	return len(r.Objects)
 }
 
-// GetConnectionCount returns the number of connections in the room
-func (r *Room) GetConnectionCount() int {
+// GetConnectionCount: returns number of connections in room
+func (r *Room) ConnectionCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	return len(r.Connections)
+}
+
+// GetConnections: returns snapshot of current connections (for broadcasting)
+func (r *Room) GetConnections() map[string]*user.User {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Create a copy to avoid race conditions
+	snapshot := make(map[string]*user.User, len(r.Connections))
+	for k, v := range r.Connections {
+		snapshot[k] = v
+	}
+	return snapshot
+}
+
+// RemoveConnection: removes user connection from room (cleanup after failed broadcast)
+func (r *Room) RemoveConnection(userID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.Connections, userID)
+}
+
+// GetUserColor: returns the user's color in this room
+func (r *Room) GetUserColor(userID string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.UserColors[userID]
 }
