@@ -2,6 +2,7 @@ package room
 
 import (
 	"log"
+	"sync"
 
 	"main/internal/user"
 
@@ -36,19 +37,32 @@ func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocke
 		}
 	}
 
-	// Write outside lock to avoid blocking operations
+	// Concurrent write to all users
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	var failedUsers []*user.User
+
 	for _, u := range users {
-		if err := u.WriteMessage(websocket.TextMessage, msg); err != nil {
-			log.Printf("Broadcast failed for user %s: %v", u.ID, err)
-			failedUsers = append(failedUsers, u)
-		}
+		wg.Add(1)
+		go func(usr *user.User) {
+			defer wg.Done()
+
+			if err := usr.WriteMessage(websocket.TextMessage, msg); err != nil {
+				log.Printf("Broadcast failed for user %s: %v", usr.ID, err)
+				mu.Lock()
+				failedUsers = append(failedUsers, usr)
+				mu.Unlock()
+			}
+		}(u)
 	}
+
+	wg.Wait()
 
 	// Clean up failed connections
 	for _, u := range failedUsers {
+		// remove from room 
 		rm.RemoveConnection(u.ID)
-		// Close the underlying WebSocket connection to release resources
+		// Close WebSocket connection
 		u.Connection.Close()
 	}
 }
