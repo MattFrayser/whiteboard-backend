@@ -5,20 +5,26 @@ import (
 	"fmt"
 	"time"
 
-	"main/internal/object"
 	"main/internal/room"
 	"main/internal/user"
-
 )
+
+
+// User session cursor functions
+type SessionProvider interface {
+	LastCursor(userID string) (time.Time, bool)
+	UpdateLastCursor(userID string, t time.Time)
+}
+
 
 // CursorHandler handles cursor position update messages
 type CursorHandler struct {
 	sessionMgr  SessionProvider
-	broadcaster Broadcaster
+	broadcaster *room.Broadcaster
 }
 
 // NewCursorHandler creates a new cursor handler with dependencies
-func NewCursorHandler(sessionMgr SessionProvider, broadcaster Broadcaster) *CursorHandler {
+func NewCursorHandler(sessionMgr SessionProvider, broadcaster *room.Broadcaster) *CursorHandler {
 	return &CursorHandler{
 		sessionMgr:  sessionMgr,
 		broadcaster: broadcaster,
@@ -28,7 +34,7 @@ func NewCursorHandler(sessionMgr SessionProvider, broadcaster Broadcaster) *Curs
 // Handle processes cursor messages with server-side throttling
 func (h *CursorHandler) Handle(rm *room.Room, u *user.User, data map[string]interface{}) error {
 	now := time.Now()
-	lastCursorTime, exists := h.sessionMgr.LastCursorUpdate(u.ID)
+	lastCursorTime, exists := h.sessionMgr.LastCursor(u.ID)
 	if !exists {
 		return fmt.Errorf("session not found")
 	}
@@ -38,11 +44,11 @@ func (h *CursorHandler) Handle(rm *room.Room, u *user.User, data map[string]inte
 		return nil // Ignore to throttle
 	}
 
-	h.sessionMgr.UpdateLastCursorUpdate(u.ID, now)
+	h.sessionMgr.UpdateLastCursor(u.ID, now)
 
 	// Get user's color from the room (room-specific color)
 	data["color"] = rm.GetUserColor(u.ID)
-	data["userId"] = object.SanitizeString(u.ID)
+	data["userId"] = u.ID
 
 	msg, err := json.Marshal(data)
 	if err != nil {

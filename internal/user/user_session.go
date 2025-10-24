@@ -7,21 +7,20 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// SessionManager manages user sessions
 type SessionManager struct {
-	sessions map[string]*UserSession
-	mu       sync.RWMutex
+	sessions      map[string]*UserSession // userID -> session
+	tokenToUserID map[string]string       // token -> userID
+	mu            sync.RWMutex
 }
 
-// NewSessionManager creates a new session manager
 func NewSessionManager() *SessionManager {
 	return &SessionManager{
-		sessions: make(map[string]*UserSession),
+		sessions:      make(map[string]*UserSession),
+		tokenToUserID: make(map[string]string),
 	}
 }
 
-// GetOrCreate gets an existing session or creates a new one
-// Accepts a color parameter for new sessions
+// GetOrCreate: gets an existing session or creates a new one
 func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -32,20 +31,66 @@ func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession 
 		return session
 	}
 
-	// Create new session with provided color
+	// Create new session with generated token
 	now := time.Now()
+	token := GenerateSessionToken()
 	session = &UserSession{
 		UserID:           userID,
+		SessionToken:     token,
 		LastSeen:         now,
 		LastCursorUpdate: time.Time{},
 		RateLimiter:      rate.NewLimiter(30, 10), // 30 msg/sec, burst of 10
-		Color:            color,
 	}
 	sm.sessions[userID] = session
+	sm.tokenToUserID[token] = userID
 	return session
 }
 
-// UpdateLastSeen updates the last seen time for a user session
+// ValidateToken: validate session token and returns the associated userID
+func (sm *SessionManager) ValidateToken(token string) (string, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	userID, exists := sm.tokenToUserID[token]
+	if !exists {
+		return "", false
+	}
+
+	// Verify the session still exists
+	session, sessionExists := sm.sessions[userID]
+	if !sessionExists {
+		return "", false
+	}
+
+	// Update last seen
+	session.LastSeen = time.Now()
+	return userID, true
+}
+
+// GetSessionByToken: retrieve session by token
+func (sm *SessionManager) GetSessionByToken(token string) (*UserSession, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	userID, exists := sm.tokenToUserID[token]
+	if !exists {
+		return nil, false
+	}
+
+	session, sessionExists := sm.sessions[userID]
+	return session, sessionExists
+}
+
+// UpdateTokenMapping: updates the token-to-userID mapping
+// Used when overriding a session's token
+func (sm *SessionManager) UpdateTokenMapping(token string, userID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	sm.tokenToUserID[token] = userID
+}
+
+// UpdateLastSeen: update last seen time for a user session
 func (sm *SessionManager) UpdateLastSeen(userID string, lastSeen time.Time) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -55,7 +100,7 @@ func (sm *SessionManager) UpdateLastSeen(userID string, lastSeen time.Time) {
 	}
 }
 
-// GetLastSeen gets the last seen time for a user session
+// LastSeen: gets the last seen time for a user session
 func (sm *SessionManager) LastSeen(userID string) (time.Time, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -66,8 +111,8 @@ func (sm *SessionManager) LastSeen(userID string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// GetLastCursorUpdate gets the last cursor update time for a user session
-func (sm *SessionManager) LastCursorUpdate(userID string) (time.Time, bool) {
+// LastCursor: gets the last cursor update time for a user session
+func (sm *SessionManager) LastCursor(userID string) (time.Time, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -77,8 +122,8 @@ func (sm *SessionManager) LastCursorUpdate(userID string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// UpdateLastCursorUpdate updates the last cursor update time for a user session
-func (sm *SessionManager) UpdateLastCursorUpdate(userID string, lastCursorUpdate time.Time) {
+// UpdateLastCursor: updates the last cursor update time for a user session
+func (sm *SessionManager) UpdateLastCursor(userID string, lastCursorUpdate time.Time) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -87,7 +132,20 @@ func (sm *SessionManager) UpdateLastCursorUpdate(userID string, lastCursorUpdate
 	}
 }
 
-// Cleanup removes expired user sessions
+// Remove:  removes a user session (called on disconnect)
+func (sm *SessionManager) Remove(userID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Remove token mapping if session exists
+	if session, exists := sm.sessions[userID]; exists {
+		delete(sm.tokenToUserID, session.SessionToken)
+	}
+
+	delete(sm.sessions, userID)
+}
+
+// Cleanup: removes expired user sessions
 func (sm *SessionManager) Cleanup() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -96,6 +154,7 @@ func (sm *SessionManager) Cleanup() {
 	for userID, session := range sm.sessions {
 		// Remove sessions inactive for 1 hour
 		if now.Sub(session.LastSeen) > 1*time.Hour {
+			delete(sm.tokenToUserID, session.SessionToken)
 			delete(sm.sessions, userID)
 		}
 	}

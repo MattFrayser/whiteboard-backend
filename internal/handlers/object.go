@@ -14,10 +14,10 @@ import (
 type ObjectHandler struct {
 	validator   *object.Validator
 	config      *middleware.RateLimit
-	broadcaster Broadcaster
+	broadcaster *room.Broadcaster
 }
 
-func NewObjectHandler(validator *object.Validator, config *middleware.RateLimit, broadcaster Broadcaster) *ObjectHandler {
+func NewObjectHandler(validator *object.Validator, config *middleware.RateLimit, broadcaster *room.Broadcaster) *ObjectHandler {
 	return &ObjectHandler{
 		validator:   validator,
 		config:      config,
@@ -77,9 +77,9 @@ func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string
 
 	// Update the data object with sanitized data for broadcast
 	objectMsg["data"] = sanitizedData
-	objectMsg["id"] = object.SanitizeString(id)
+	objectMsg["id"] = id
 	data["object"] = objectMsg
-	data["userId"] = object.SanitizeString(u.ID)
+	data["userId"] = u.ID
 
 	// Broadcast
 	msg, err := json.Marshal(data)
@@ -124,9 +124,9 @@ func (h *ObjectHandler) HandleUpdated(rm *room.Room, u *user.User, data map[stri
 
 	// Update the data object with sanitized data for broadcast
 	objectMsg["data"] = sanitizedData
-	objectMsg["id"] = object.SanitizeString(id)
+	objectMsg["id"] = id
 	data["object"] = objectMsg
-	data["userId"] = object.SanitizeString(u.ID)
+	data["userId"] = u.ID
 
 	// Broadcast
 	msg, err := json.Marshal(data)
@@ -147,9 +147,9 @@ func (h *ObjectHandler) HandleDeleted(rm *room.Room, u *user.User, data map[stri
 	// Delete object from room
 	rm.DeleteObject(objectID)
 
-	// Broadcast with sanitized IDs
-	data["objectId"] = object.SanitizeString(objectID)
-	data["userId"] = object.SanitizeString(u.ID)
+	// Broadcast IDs
+	data["objectId"] = objectID
+	data["userId"] = u.ID
 	msg, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal broadcast message: %w", err)

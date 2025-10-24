@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// ObjectCounter:  interface for counting objects
+// ObjectCounter interface for counting objects (avoids import cycle with room)
 type ObjectCounter interface {
 	ObjectCount() int
 }

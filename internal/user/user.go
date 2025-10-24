@@ -13,6 +13,7 @@ import (
 // UserSession: persists across disconnects
 type UserSession struct {
 	UserID           string
+	SessionToken     string 
 	LastRoom         string
 	LastSeen         time.Time
 	LastCursorUpdate time.Time
@@ -28,17 +29,25 @@ type User struct {
 	WriteMutex sync.Mutex 
 }
 
-// GenerateUUID generates a random UUID for user identification
+// GenerateUUID: generate random UUID for user identification
 func GenerateUUID() string {
 	bytes := make([]byte, 16)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
 }
 
-// WriteMessage safely writes a message to the WebSocket connection with mutex protection
-// gorilla/websocket does not allow concurrent writes
+// GenerateSessionToken: generates session token
+func GenerateSessionToken() string {
+	bytes := make([]byte, 32) // 256-bit token
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
+}
+
+// WriteMessage: writes message to WebSocket connection 
+// (gorilla/websocket does not allow concurrent writes)
 func (u *User) WriteMessage(messageType int, data []byte) error {
 	u.WriteMutex.Lock()
 	defer u.WriteMutex.Unlock()
+
 	return u.Connection.WriteMessage(messageType, data)
 }

@@ -2,19 +2,20 @@ package room
 
 import (
 	"errors"
+	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
 	"main/internal/middleware"
 	"main/internal/object"
 	"main/internal/user"
-
 )
 
 // Manager manages all rooms in the application
 type Manager struct {
 	rooms map[string]*Room
-	synchronizer Synchronizer
+	synchronizer *Synchronizer
 	mu    sync.RWMutex
 
 }
@@ -28,9 +29,10 @@ func NewManager() *Manager {
 
 
 func (rm *Manager) CreateRoom(roomCode string, maxRooms int) (*Room, error) {
-	if roomCode == "" {
-		return nil, errors.New("room code missing")
+	if err := rm.ValidateRoomCode(roomCode); err != nil {
+		return nil, errors.New("invalid room code")
 	}
+
 
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -58,20 +60,23 @@ func (rm *Manager) CreateRoom(roomCode string, maxRooms int) (*Room, error) {
 
 // JoinRoom adds a user to a room, creating it if necessary
 func (rm *Manager) JoinRoom(roomCode string, session *user.UserSession, u *user.User, rl *middleware.RateLimit) (*Room, error) {
-	if roomCode == "" {
-		return nil, errors.New("room code missing")
+	if err := rm.ValidateRoomCode(roomCode); err != nil {
+		return nil, errors.New("invalid room code")
 	}
+
 
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	// Check if user is rejoining their last room and it still exists
 	if session.LastRoom == roomCode {
-		if existingRoom, active := rm.GetRoom(roomCode); active {
+		if existingRoom, active := rm.rooms[roomCode]; active {
 			if err := existingRoom.Join(u, rl.MaxRoomSize); err != nil {
 				return nil, err
 			}
 			if err := rm.synchronizer.SyncNewUser(existingRoom, u); err != nil {
+				// Sync failed, remove user from room to maintain consistent state
+				existingRoom.Leave(u)
 				return nil, err
 			}
 
@@ -90,6 +95,8 @@ func (rm *Manager) JoinRoom(roomCode string, session *user.UserSession, u *user.
 	}
 
 	if err := rm.synchronizer.SyncNewUser(room, u); err != nil {
+		// Sync failed, remove user from room to maintain consistent state
+		room.Leave(u)
 		return nil, err
 	}
 
@@ -132,4 +139,14 @@ func (rm *Manager) RoomCount() int {
 	defer rm.mu.RUnlock()
 
 	return len(rm.rooms)
+}
+
+func (rm *Manager) ValidateRoomCode(code string) error {
+    if len(code) < 3 || len(code) > 50 {
+        return fmt.Errorf("invalid room code length")
+    }
+    if !regexp.MustCompile(`^[a-zA-Z0-9-_]+$`).MatchString(code) {
+        return fmt.Errorf("invalid room code format")
+    }
+    return nil
 }

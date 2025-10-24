@@ -42,7 +42,7 @@ func main() {
 	broadcaster := room.NewBroadcaster()
 	synchronizer := room.NewSynchronizer()
 	msgRouter := handlers.NewMessageRouter(validator, config, sessionMgr, broadcaster)
-	authenticator := transport.NewAuthenticator()
+	authenticator := transport.NewAuthenticator(sessionMgr)
 
 	// Setup HTTP handlers
 	http.Handle("/", http.FileServer(http.Dir("./frontend")))

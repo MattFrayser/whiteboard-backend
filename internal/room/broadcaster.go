@@ -1,6 +1,8 @@
 package room
 
 import (
+	"log"
+
 	"main/internal/user"
 
 	"github.com/gorilla/websocket"
@@ -37,8 +39,8 @@ func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocke
 	// Write outside lock to avoid blocking operations
 	var failedUsers []*user.User
 	for _, u := range users {
-		if err := sender.WriteMessage(websocket.TextMessage, msg); err != nil {
-			// Connection failed, mark for removal
+		if err := u.WriteMessage(websocket.TextMessage, msg); err != nil {
+			log.Printf("Broadcast failed for user %s: %v", u.ID, err)
 			failedUsers = append(failedUsers, u)
 		}
 	}
@@ -46,5 +48,7 @@ func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocke
 	// Clean up failed connections
 	for _, u := range failedUsers {
 		rm.RemoveConnection(u.ID)
+		// Close the underlying WebSocket connection to release resources
+		u.Connection.Close()
 	}
 }

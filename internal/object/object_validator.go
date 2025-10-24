@@ -135,10 +135,3 @@ func formatSingleError(err validator.FieldError) string {
 		return fmt.Sprintf("'%s' is invalid", field)
 	}
 }
-
-// SanitizeString sanitizes a single string value to prevent XSS
-// Uses the same bluemonday policy as object data sanitization
-func SanitizeString(s string) string {
-	policy := bluemonday.StrictPolicy()
-	return policy.Sanitize(s)
-}
