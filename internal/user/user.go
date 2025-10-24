@@ -12,13 +12,14 @@ import (
 
 // UserSession: persists across disconnects
 type UserSession struct {
-	UserID           string
-	SessionToken     string 
-	LastRoom         string
-	LastSeen         time.Time
-	LastCursorUpdate time.Time
-	RateLimiter      *rate.Limiter
-	Color            string
+	UserID             string
+	SessionToken       string
+	LastRoom           string
+	LastSeen           time.Time
+	LastCursorUpdate   time.Time
+	ObjectRateLimiter  *rate.Limiter
+	CursorRateLimiter  *rate.Limiter
+	Color              string
 }
 
 // User: connected user

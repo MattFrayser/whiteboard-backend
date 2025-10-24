@@ -28,7 +28,7 @@ func NewValidator() *Validator {
 func (v *Validator) ValidateAndSanitize(objType string, data map[string]interface{}) (map[string]interface{}, error) {
 	// object type is in whitelist
 	if !AllowedObjectTypes[objType] {
-		return nil, fmt.Errorf("invalid object type: %s (allowed types: rect, circle, ellipse, line, path, text, image, polygon, arrow)", objType)
+		return nil, fmt.Errorf("invalid object type: %s (allowed types: rectangle, circle, line, path, text, stroke)", objType)
 	}
 
 	//  schema struct for this object type

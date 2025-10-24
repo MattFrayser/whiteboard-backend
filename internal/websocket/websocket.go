@@ -152,9 +152,11 @@ func HandleWebSocket(
 	}
 
 	// Send room-specific color after joining
+	userColor := rm.GetUserColor(u.ID)
+
 	colorResponse := map[string]interface{}{
 		"type":  "room_joined",
-		"color": rm.GetUserColor(u.ID),
+		"color": userColor,
 		"room":  roomCode,
 	}
 	colorMsg, err := json.Marshal(colorResponse)
@@ -165,6 +167,12 @@ func HandleWebSocket(
 	if err := u.WriteMessage(websocket.TextMessage, colorMsg); err != nil {
 		log.Printf("Error: Failed to send room joined response - %v", err)
 		return
+	}
+
+	// Sync room state to new user
+	if err := synchronizer.SyncNewUser(rm, u); err != nil {
+		log.Printf("Error: Failed to sync room state to user %s - %v", u.ID, err)
+		// Don't return - allow user to continue even if sync fails
 	}
 
 	// Start message processing loop
@@ -223,9 +231,29 @@ func run(conn *websocket.Conn, rm *room.Room, u *user.User, config *middleware.R
 			continue // Drop oversized message
 		}
 
-		// Check rate limit from session
-		if !u.Session.RateLimiter.Allow() {
-			log.Printf("Rate limit exceeded for user: %s", u.ID)
+		// Check rate limit based on message type
+		var data map[string]interface{}
+		if err := json.Unmarshal(msg, &data); err != nil {
+			log.Printf("Failed to parse message for rate limiting: %v", err)
+			continue
+		}
+
+		messageType, ok := data["type"].(string)
+		if !ok {
+			log.Printf("Message missing type field from user %s", u.ID)
+			continue
+		}
+
+		// Route to appropriate rate limiter
+		var rateLimitExceeded bool
+		if messageType == "cursor" {
+			rateLimitExceeded = !u.Session.CursorRateLimiter.Allow()
+		} else {
+			rateLimitExceeded = !u.Session.ObjectRateLimiter.Allow()
+		}
+
+		if rateLimitExceeded {
+			log.Printf("Rate limit exceeded for user %s (type: %s)", u.ID, messageType)
 			continue // Drop message
 		}
 

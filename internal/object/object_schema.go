@@ -13,16 +13,17 @@ const (
 )
 
 var AllowedObjectTypes = map[string]bool{
-	"rect":    true,
-	"circle":  true,
-	"line":    true,
-	"path":    true,
-	"text":    true,
+	"rectangle": true,
+	"circle":    true,
+	"line":      true,
+	"path":      true,
+	"text":      true,
+	"stroke":    true,
 }
 
 func GetSchemaForType(objType string) interface{} {
 	switch objType {
-	case "rect":
+	case "rectangle":
 		return &RectangleData{}
 	case "circle":
 		return &CircleData{}
@@ -30,6 +31,8 @@ func GetSchemaForType(objType string) interface{} {
 		return &LineData{}
 	case "brush":
 		return &BrushData{}
+	case "stroke":
+		return &StrokeData{}
 	case "text":
 		return &TextData{}
 	default:
@@ -91,16 +94,17 @@ type Point struct {
 // =============================================================================
 
 type RectangleData struct {
-	Position
-	Size
-	StyleProps
-	Transform
+	LineCoordinates
+	Color string  `json:"color,omitempty" validate:"omitempty,max=50"`
+	Width float64 `json:"width,omitempty" validate:"omitempty,min=0,max=1000"`
+	Fill  string  `json:"fill,omitempty" validate:"omitempty,max=50"`
 }
 
 type CircleData struct {
-	CenterPosition
-	Radius float64 `json:"radius" validate:"required,min=0,max=1000000"`
-	StyleProps
+	LineCoordinates
+	Color string  `json:"color,omitempty" validate:"omitempty,max=50"`
+	Width float64 `json:"width,omitempty" validate:"omitempty,min=0,max=1000"`
+	Fill  string  `json:"fill,omitempty" validate:"omitempty,max=50"`
 }
 
 // =============================================================================
@@ -109,9 +113,8 @@ type CircleData struct {
 
 type LineData struct {
 	LineCoordinates
-	Stroke      string  `json:"stroke,omitempty" validate:"omitempty,max=50"`
-	StrokeWidth float64 `json:"strokeWidth,omitempty" validate:"omitempty,min=0,max=1000"`
-	Opacity     float64 `json:"opacity,omitempty" validate:"omitempty,min=0,max=1"`
+	Color string  `json:"color,omitempty" validate:"omitempty,max=50"`
+	Width float64 `json:"width,omitempty" validate:"omitempty,min=0,max=1000"`
 }
 
 // =============================================================================
@@ -127,6 +130,12 @@ type BrushData struct {
 	Smooth      bool    `json:"smooth,omitempty"`
 }
 
+type StrokeData struct {
+	Points []Point `json:"points" validate:"required,min=2,max=10000,dive"`
+	Color  string  `json:"color,omitempty" validate:"omitempty,max=50"`
+	Width  float64 `json:"width,omitempty" validate:"omitempty,min=0,max=1000"`
+}
+
 // =============================================================================
 // Content Shape Types
 // =============================================================================
@@ -136,11 +145,10 @@ type TextData struct {
 	Text       string  `json:"text" validate:"required,max=1000"`
 	FontSize   float64 `json:"fontSize,omitempty" validate:"omitempty,min=1,max=500"`
 	FontFamily string  `json:"fontFamily,omitempty" validate:"omitempty,max=100"`
-	Fill       string  `json:"fill,omitempty" validate:"omitempty,max=50"`
+	Color      string  `json:"color,omitempty" validate:"omitempty,max=50"`
 	Bold       bool    `json:"bold,omitempty"`
 	Italic     bool    `json:"italic,omitempty"`
-	Underline  bool    `json:"underline,omitempty"`
-	Transform
+	Background string  `json:"background,omitempty" validate:"omitempty,max=50"`
 }
 
 

@@ -35,11 +35,12 @@ func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession 
 	now := time.Now()
 	token := GenerateSessionToken()
 	session = &UserSession{
-		UserID:           userID,
-		SessionToken:     token,
-		LastSeen:         now,
-		LastCursorUpdate: time.Time{},
-		RateLimiter:      rate.NewLimiter(30, 10), // 30 msg/sec, burst of 10
+		UserID:            userID,
+		SessionToken:      token,
+		LastSeen:          now,
+		LastCursorUpdate:  time.Time{},
+		ObjectRateLimiter: rate.NewLimiter(30, 10), // 30 msg/sec, burst of 10 for objects
+		CursorRateLimiter: rate.NewLimiter(60, 20), // 60 msg/sec, burst of 20 for cursor
 	}
 	sm.sessions[userID] = session
 	sm.tokenToUserID[token] = userID

@@ -23,19 +23,15 @@ type Manager struct {
 // NewManager creates a new room manager
 func NewManager() *Manager {
 	return &Manager{
-		rooms: make(map[string]*Room),
+		rooms:        make(map[string]*Room),
+		synchronizer: NewSynchronizer(),
 	}
 }
 
 
-func (rm *Manager) CreateRoom(roomCode string, maxRooms int) (*Room, error) {
-	if err := rm.ValidateRoomCode(roomCode); err != nil {
-		return nil, errors.New("invalid room code")
-	}
-
-
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
+// CreateRoom: helper to join 
+// no need to check roomCode or lock, this should only be called from join
+func (rm *Manager) createRoom(roomCode string, maxRooms int) (*Room, error) {
 
 	if rm.rooms[roomCode] == nil {
 		// Check global room limit before creating new room
@@ -60,10 +56,10 @@ func (rm *Manager) CreateRoom(roomCode string, maxRooms int) (*Room, error) {
 
 // JoinRoom adds a user to a room, creating it if necessary
 func (rm *Manager) JoinRoom(roomCode string, session *user.UserSession, u *user.User, rl *middleware.RateLimit) (*Room, error) {
-	if err := rm.ValidateRoomCode(roomCode); err != nil {
+
+	if err := rm.validateRoomCode(roomCode); err != nil {
 		return nil, errors.New("invalid room code")
 	}
-
 
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -74,29 +70,17 @@ func (rm *Manager) JoinRoom(roomCode string, session *user.UserSession, u *user.
 			if err := existingRoom.Join(u, rl.MaxRoomSize); err != nil {
 				return nil, err
 			}
-			if err := rm.synchronizer.SyncNewUser(existingRoom, u); err != nil {
-				// Sync failed, remove user from room to maintain consistent state
-				existingRoom.Leave(u)
-				return nil, err
-			}
-
 			return existingRoom, nil
 		}
 	}
 
 	// Either joining: different room, first time, room expired -> create/join new
-	room, err := rm.CreateRoom(roomCode, rl.MaxRooms)
+	room, err := rm.createRoom(roomCode, rl.MaxRooms)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := room.Join(u, rl.MaxRoomSize); err != nil {
-		return nil, err
-	}
-
-	if err := rm.synchronizer.SyncNewUser(room, u); err != nil {
-		// Sync failed, remove user from room to maintain consistent state
-		room.Leave(u)
 		return nil, err
 	}
 
@@ -141,7 +125,7 @@ func (rm *Manager) RoomCount() int {
 	return len(rm.rooms)
 }
 
-func (rm *Manager) ValidateRoomCode(code string) error {
+func (rm *Manager) validateRoomCode(code string) error {
     if len(code) < 3 || len(code) > 50 {
         return fmt.Errorf("invalid room code length")
     }
