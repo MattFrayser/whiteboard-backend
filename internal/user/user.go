@@ -40,7 +40,9 @@ func GenerateUUID() string {
 // GenerateSessionToken: generates session token
 func GenerateSessionToken() string {
 	bytes := make([]byte, 32) // 256-bit token
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		panic("Crypto/rand failed: " + err.Error())
+	}
 	return hex.EncodeToString(bytes)
 }
 
