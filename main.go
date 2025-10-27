@@ -4,14 +4,16 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"main/internal/handlers"
 	"main/internal/middleware"
-	"main/internal/room"
-	"main/internal/websocket"
-	"main/internal/user"
 	"main/internal/object"
+	"main/internal/room"
+	"main/internal/user"
+	"main/internal/websocket"
 
 	"github.com/joho/godotenv"
 )
@@ -22,12 +24,15 @@ func main() {
 
 	godotenv.Load()
 
+	// Parse allowed domains from environment
+	allowedDomains := strings.Split(os.Getenv("DOMAINS"), ",")
+
 	// Initialize rate limiting configuration
 	config := middleware.NewRateLimit(
 		10,     // maxRoomSize
-		1000,   // maxObjects 
+		1000,   // maxObjects
 		250000, // maxMessageSize (250KB)
-		100,    // maxRooms 
+		100,    // maxRooms
 		5,      // maxObjectDepth
 		1000,   // maxObjectElements (unique keys)
 		30,     // messagesPerSecond
@@ -44,10 +49,23 @@ func main() {
 	msgRouter := handlers.NewMessageRouter(validator, config, sessionMgr, broadcaster)
 	authenticator := transport.NewAuthenticator(sessionMgr)
 
+	// Create WebSocket configuration with all dependencies
+	wsConfig := transport.NewWebSocketConfig(
+		allowedDomains,
+		ipRateLimiter,
+		config,
+		sessionMgr,
+		validator,
+		roomMgr,
+		msgRouter,
+		synchronizer,
+		authenticator,
+	)
+
 	// Setup HTTP handlers
 	http.Handle("/", http.FileServer(http.Dir("./frontend")))
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		transport.HandleWebSocket(w, r, ipRateLimiter, config, sessionMgr, validator, roomMgr, msgRouter, synchronizer, authenticator)
+		transport.HandleWebSocket(w, r, wsConfig)
 	})
 
 	// Start periodic cleanups

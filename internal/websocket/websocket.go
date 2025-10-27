@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -17,21 +16,54 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	// CORS
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("origin")
+// WebSocketConfig: holds configuration and dependencies for WebSocket handling
+type WebSocketConfig struct {
+	Upgrader      *websocket.Upgrader
+	IPRateLimiter *middleware.IPRateLimit
+	RateLimit     *middleware.RateLimit
+	SessionMgr    *user.SessionManager
+	Validator     *object.Validator
+	RoomManager   *room.Manager
+	MsgRouter     *handlers.MessageRouter
+	Synchronizer  *room.Synchronizer
+	Authenticator *Authenticator
+}
 
-		allowedDomains := strings.Split(os.Getenv("DOMAINS"), ",")
-
-		for _, allowed := range allowedDomains {
-			if origin == strings.TrimSpace(allowed) {
-				return true
+// NewWebSocketConfig: creates a new WebSocketConfig with upgrader configured for allowed domains
+func NewWebSocketConfig(
+	allowedDomains []string,
+	ipRateLimiter *middleware.IPRateLimit,
+	rateLimit *middleware.RateLimit,
+	sessionMgr *user.SessionManager,
+	validator *object.Validator,
+	roomManager *room.Manager,
+	msgRouter *handlers.MessageRouter,
+	synchronizer *room.Synchronizer,
+	authenticator *Authenticator,
+) *WebSocketConfig {
+	upgrader := &websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("origin")
+			for _, allowed := range allowedDomains {
+				if origin == strings.TrimSpace(allowed) {
+					return true
+				}
 			}
-		}
+			return false
+		},
+	}
 
-		return false
-	},
+	return &WebSocketConfig{
+		Upgrader:      upgrader,
+		IPRateLimiter: ipRateLimiter,
+		RateLimit:     rateLimit,
+		SessionMgr:    sessionMgr,
+		Validator:     validator,
+		RoomManager:   roomManager,
+		MsgRouter:     msgRouter,
+		Synchronizer:  synchronizer,
+		Authenticator: authenticator,
+	}
 }
 
 // GetClientIP: extracts the real client IP from the request
@@ -56,21 +88,10 @@ func cleanup(rm *room.Room, u *user.User, sessionMgr *user.SessionManager) {
 }
 
 // HandleWebSocket: upgrades HTTP to WebSocket and joins the room
-func HandleWebSocket(
-	w http.ResponseWriter,
-	r *http.Request,
-	ipRateLimiter *middleware.IPRateLimit,
-	config *middleware.RateLimit,
-	sessionMgr *user.SessionManager,
-	validator *object.Validator,
-	roomManager *room.Manager,
-	msgRouter *handlers.MessageRouter,
-	synchronizer *room.Synchronizer,
-	authenticator *Authenticator,
-) {
+func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfig) {
 	// Check if rate limited
 	clientIP := GetClientIP(r)
-	if !ipRateLimiter.Allow(clientIP) {
+	if !cfg.IPRateLimiter.Allow(clientIP) {
 		log.Printf("Rate limit exceeded for IP: %s", clientIP)
 		http.Error(w, "Too many connections", http.StatusTooManyRequests)
 		return
@@ -81,7 +102,7 @@ func HandleWebSocket(
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
 	// Upgrade connection
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := cfg.Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Error: Failed to upgrade connection - %v", err)
 		return
@@ -96,7 +117,7 @@ func HandleWebSocket(
 	}
 
 	// Authenticate user (validates token or creates new user)
-	authResult, err := authenticator.Authenticate(conn, 5*time.Second)
+	authResult, err := cfg.Authenticator.Authenticate(conn, 5*time.Second)
 	if err != nil {
 		log.Printf("Error: Authentication failed - %v", err)
 		return
@@ -106,14 +127,14 @@ func HandleWebSocket(
 	var session *user.UserSession
 	if authResult.IsNewUser {
 		// Create new session with the generated token
-		session = sessionMgr.GetOrCreate(authResult.UserID, "")
+		session = cfg.SessionMgr.GetOrCreate(authResult.UserID, "")
 		// Override the token with the one we generated during auth
 		// (GetOrCreate generates its own, but we want to use the auth one)
 		session.SessionToken = authResult.SessionToken
-		sessionMgr.UpdateTokenMapping(authResult.SessionToken, authResult.UserID)
+		cfg.SessionMgr.UpdateTokenMapping(authResult.SessionToken, authResult.UserID)
 	} else {
 		// Get existing session for returning user
-		session, _ = sessionMgr.GetSessionByToken(authResult.SessionToken)
+		session, _ = cfg.SessionMgr.GetSessionByToken(authResult.SessionToken)
 	}
 
 	session.LastRoom = roomCode // Track last room for resumption
@@ -126,7 +147,7 @@ func HandleWebSocket(
 	}
 	// Ensure cleanup on all exit paths (before room join)
 	var rm *room.Room
-	defer cleanup(rm, u, sessionMgr)
+	defer cleanup(rm, u, cfg.SessionMgr)
 
 	// Send authentication response with token to client
 	response := map[string]interface{}{
@@ -146,7 +167,7 @@ func HandleWebSocket(
 
 	// Join room using room joiner
 	var joinErr error
-	rm, joinErr = roomManager.JoinRoom(roomCode, session, u, config)
+	rm, joinErr = cfg.RoomManager.JoinRoom(roomCode, session, u, cfg.RateLimit)
 	if joinErr != nil {
 		log.Printf("Error: Failed to join room (%s) - %v", roomCode, joinErr)
 		return
@@ -171,13 +192,13 @@ func HandleWebSocket(
 	}
 
 	// Sync room state to new user
-	if err := synchronizer.SyncNewUser(rm, u); err != nil {
+	if err := cfg.Synchronizer.SyncNewUser(rm, u); err != nil {
 		log.Printf("Error: Failed to sync room state to user %s - %v", u.ID, err)
 		// Don't return - allow user to continue even if sync fails
 	}
 
 	// Start message processing loop
-	run(conn, rm, u, config, msgRouter)
+	run(conn, rm, u, cfg.RateLimit, cfg.MsgRouter)
 }
 
 // run: message loop for WebSocket connections
