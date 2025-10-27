@@ -28,6 +28,9 @@ func NewManager() *Manager {
 	}
 }
 
+// compile regex once 
+var roomCodeRegex = regexp.MustCompile(`^[a-zA-Z0-9-_]+$`)
+
 
 // CreateRoom: helper to join 
 // no need to check roomCode or lock, this should only be called from join
@@ -126,10 +129,10 @@ func (rm *Manager) RoomCount() int {
 }
 
 func (rm *Manager) validateRoomCode(code string) error {
-    if len(code) < 3 || len(code) > 50 {
+    if len(code) != 6 {
         return fmt.Errorf("invalid room code length")
     }
-    if !regexp.MustCompile(`^[a-zA-Z0-9-_]+$`).MatchString(code) {
+    if !roomCodeRegex.MatchString(code) {
         return fmt.Errorf("invalid room code format")
     }
     return nil
