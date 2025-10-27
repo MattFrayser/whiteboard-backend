@@ -9,9 +9,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// RoomState: minimum interface for broadcasting
+// RoomConnections: minimum interface for broadcasting
 type RoomConnections interface {
-	GetConnections() map[string]*user.User
+	GetConnections() []*user.User
 	RemoveConnection(userID string)
 	GetUserColor(userID string) string
 }
@@ -26,12 +26,12 @@ func NewBroadcaster() *Broadcaster {
 
 // Broadcast: sends a message to all users in a room (except the sender)
 func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocket.Conn) {
-	// snapshot of connections
-	connections := rm.GetConnections()
+	// Get snapshot of connections as slice (already filtered copy from Room)
+	allUsers := rm.GetConnections()
 
-	// list of users to broadcast to
-	users := make([]*user.User, 0, len(connections))
-	for _, u := range connections {
+	// Filter out sender
+	users := make([]*user.User, 0, len(allUsers))
+	for _, u := range allUsers {
 		if u.Connection != sender {
 			users = append(users, u)
 		}

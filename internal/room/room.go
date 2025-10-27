@@ -106,15 +106,16 @@ func (r *Room) ConnectionCount() int {
 	return len(r.Connections)
 }
 
-// GetConnections: returns snapshot of current connections (for broadcasting)
-func (r *Room) GetConnections() map[string]*user.User {
+// GetConnections: returns snapshot of current connections as a slice (for broadcasting)
+func (r *Room) GetConnections() []*user.User {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Create a copy to avoid race conditions
-	snapshot := make(map[string]*user.User, len(r.Connections))
-	for k, v := range r.Connections {
-		snapshot[k] = v
+	// Return slice directly - broadcaster needs a slice anyway
+	// This eliminates redundant map->slice conversion
+	snapshot := make([]*user.User, 0, len(r.Connections))
+	for _, v := range r.Connections {
+		snapshot = append(snapshot, v)
 	}
 	return snapshot
 }
