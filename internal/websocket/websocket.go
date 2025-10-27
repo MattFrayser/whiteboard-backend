@@ -36,7 +36,8 @@ var upgrader = websocket.Upgrader{
 
 // GetClientIP: extracts the real client IP from the request
 func GetClientIP(r *http.Request) string {
-	// Use RemoteAddr only - cannot be spoofed by client
+
+	// basic, will need to change if behind proxy
 	ip := r.RemoteAddr
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {
 		ip = ip[:idx] // Remove port

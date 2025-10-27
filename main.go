@@ -25,9 +25,9 @@ func main() {
 	// Initialize rate limiting configuration
 	config := middleware.NewRateLimit(
 		10,     // maxRoomSize
-		1000,   // maxObjects (reduced from 3000)
-		250000, // maxMessageSize (250KB, increased from 100KB)
-		100,    // maxRooms (reduced from 1000)
+		1000,   // maxObjects 
+		250000, // maxMessageSize (250KB)
+		100,    // maxRooms 
 		5,      // maxObjectDepth
 		1000,   // maxObjectElements (unique keys)
 		30,     // messagesPerSecond
