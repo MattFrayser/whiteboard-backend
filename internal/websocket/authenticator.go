@@ -30,11 +30,11 @@ type AuthResult struct {
 	IsNewUser    bool
 }
 
-// Authenticate: reads and validates authentication message from new connection
-// Returns userID and session token. For new users, generates both.
-// For returning users, validates token and retrieves userID.
-func (a *Authenticator) Authenticate(conn *websocket.Conn, timeout time.Duration) (*AuthResult, error) {
-	// Read deadline
+// Authenticate: completes the authentication handshake
+// Token has already been pre-validated from HTTP cookie in HandleWebSocket
+// This function just reads the client's authenticate message and returns the pre-validated data
+func (a *Authenticator) Authenticate(conn *websocket.Conn, token string, timeout time.Duration) (*AuthResult, error) {
+	// Read authenticate message from client (protocol handshake)
 	conn.SetReadDeadline(time.Now().Add(timeout))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
@@ -43,8 +43,7 @@ func (a *Authenticator) Authenticate(conn *websocket.Conn, timeout time.Duration
 	conn.SetReadDeadline(time.Time{}) // Clear timeout
 
 	var authMsg struct {
-		Type  string `json:"type"`
-		Token string `json:"token"` // Session token for returning users
+		Type string `json:"type"`
 	}
 
 	if err := json.Unmarshal(msg, &authMsg); err != nil {
@@ -55,28 +54,27 @@ func (a *Authenticator) Authenticate(conn *websocket.Conn, timeout time.Duration
 		return nil, fmt.Errorf("expected authenticate message, got: %s", authMsg.Type)
 	}
 
-	// Case 1: Returning user with valid token
-	if authMsg.Token != "" {
-		userID, valid := a.sessionMgr.ValidateToken(authMsg.Token)
+	// Token was already validated in HandleWebSocket, so we trust it here
+	// Check if this is a returning user with existing session
+	if token != "" {
+		userID, valid := a.sessionMgr.ValidateToken(token)
 		if valid {
+			// Returning user with valid session
 			log.Printf("Returning user authenticated: %s", userID)
 			return &AuthResult{
 				UserID:       userID,
-				SessionToken: authMsg.Token,
+				SessionToken: token,
 				IsNewUser:    false,
 			}, nil
 		}
-		log.Printf("Invalid or expired token provided, treating as new user")
 	}
 
-	// Case 2: New user (empty token or invalid token)
+	// New user - token will be added to session manager after this returns
 	userID := user.GenerateUUID()
-	sessionToken := user.GenerateSessionToken()
-
 	log.Printf("New user created: %s", userID)
 	return &AuthResult{
 		UserID:       userID,
-		SessionToken: sessionToken,
+		SessionToken: token, // Use the pre-generated token from HandleWebSocket
 		IsNewUser:    true,
 	}, nil
 }

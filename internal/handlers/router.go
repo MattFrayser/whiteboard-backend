@@ -15,6 +15,7 @@ type MessageRouter struct {
 	objectHandler *ObjectHandler
 	cursorHandler *CursorHandler
 	userHandler   *UserHandler
+	syncHandler   *SyncHandler
 }
 
 func NewMessageRouter(
@@ -22,11 +23,13 @@ func NewMessageRouter(
 	config *middleware.RateLimit,
 	sessionMgr SessionProvider,
 	broadcaster *room.Broadcaster,
+	synchronizer *room.Synchronizer,
 ) *MessageRouter {
 	return &MessageRouter{
 		objectHandler: NewObjectHandler(validator, config, broadcaster),
 		cursorHandler: NewCursorHandler(sessionMgr, broadcaster),
 		userHandler:   NewUserHandler(),
+		syncHandler:   NewSyncHandler(synchronizer),
 	}
 }
 
@@ -53,6 +56,8 @@ func (mr *MessageRouter) Route(rm *room.Room, u *internalUser.User, msg []byte) 
 		return mr.objectHandler.HandleDeleted(rm, u, data)
 	case "cursor":
 		return mr.cursorHandler.Handle(rm, u, data)
+	case "requestSync":
+		return mr.syncHandler.Handle(rm, u, data)
 	default:
 		return fmt.Errorf("unknown message type: %s", messageType)
 	}

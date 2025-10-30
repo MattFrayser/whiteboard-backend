@@ -32,17 +32,29 @@ func NewManager() *Manager {
 var roomCodeRegex = regexp.MustCompile(`^[a-zA-Z0-9-_]+$`)
 
 
-// CreateRoom: helper to join 
+// RoomSettings defines configuration for creating a room
+type RoomSettings struct {
+	Password    string          // Hashed password (already hashed by caller)
+	Permissions RoomPermissions // Access control settings
+	CreatedBy   string          // Creator's userId
+}
+
+// CreateRoom: helper to join
 // no need to check roomCode or lock, this should only be called from join
 func (rm *Manager) createRoom(roomCode string, maxRooms int) (*Room, error) {
+	return rm.createRoomWithSettings(roomCode, maxRooms, nil)
+}
 
+// CreateRoomWithSettings creates a new room with specific settings
+// Returns existing room if it already exists (does not overwrite)
+func (rm *Manager) createRoomWithSettings(roomCode string, maxRooms int, settings *RoomSettings) (*Room, error) {
 	if rm.rooms[roomCode] == nil {
 		// Check global room limit before creating new room
 		if len(rm.rooms) >= maxRooms {
 			return nil, errors.New("server at maximum room capacity")
 		}
 
-		rm.rooms[roomCode] = &Room{
+		room := &Room{
 			Connections:    make(map[string]*user.User),
 			Objects:        make(map[string]*object.Drawing),
 			UserColors:     make(map[string]string),
@@ -50,11 +62,31 @@ func (rm *Manager) createRoom(roomCode string, maxRooms int) (*Room, error) {
 			LastActive:     time.Now(),
 			CreatedAt:      time.Now(),
 		}
+
+		// Apply settings if provided
+		if settings != nil {
+			room.Password = settings.Password
+			room.Permissions = settings.Permissions
+			room.CreatedBy = settings.CreatedBy
+		}
+
+		rm.rooms[roomCode] = room
 	}
 
-	room := rm.rooms[roomCode]
+	return rm.rooms[roomCode], nil
+}
 
-	return room, nil
+// CreateRoomWithSettingsPublic is the public API for creating rooms with settings
+// Validates room code and acquires lock before creating
+func (rm *Manager) CreateRoomWithSettingsPublic(roomCode string, settings *RoomSettings, rl *middleware.RateLimit) (*Room, error) {
+	if err := rm.validateRoomCode(roomCode); err != nil {
+		return nil, errors.New("invalid room code")
+	}
+
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	return rm.createRoomWithSettings(roomCode, rl.MaxRooms, settings)
 }
 
 // JoinRoom adds a user to a room, creating it if necessary
@@ -78,7 +110,10 @@ func (rm *Manager) JoinRoom(roomCode string, session *user.UserSession, u *user.
 	}
 
 	// Either joining: different room, first time, room expired -> create/join new
-	room, err := rm.createRoom(roomCode, rl.MaxRooms)
+	// Set the first joiner as the creator for auto-created rooms
+	room, err := rm.createRoomWithSettings(roomCode, rl.MaxRooms, &RoomSettings{
+		CreatedBy: u.ID,
+	})
 	if err != nil {
 		return nil, err
 	}

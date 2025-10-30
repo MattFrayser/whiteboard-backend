@@ -1,4 +1,4 @@
-package room 
+package room
 
 import (
 	"errors"
@@ -9,6 +9,12 @@ import (
 	"main/internal/object"
 )
 
+// RoomPermissions defines access control settings for a room
+type RoomPermissions struct {
+	ViewOnly    bool // All users except creator are view-only
+	OnlyEditOwn bool // Users can only edit objects they created
+}
+
 // Room represents a collaborative whiteboard room
 type Room struct {
 	Connections    map[string]*user.User
@@ -17,6 +23,12 @@ type Room struct {
 	colorGenerator *user.ColorGenerator
 	LastActive     time.Time
 	CreatedAt      time.Time
+
+	// Security and permissions
+	Password    string          // Hashed password (empty if no password)
+	Permissions RoomPermissions // Access control settings
+	CreatedBy   string          // Creator's userId (has full permissions)
+
 	mu             sync.RWMutex
 }
 
@@ -134,4 +146,65 @@ func (r *Room) GetUserColor(userID string) string {
 	defer r.mu.RUnlock()
 
 	return r.UserColors[userID]
+}
+
+// IsCreator: checks if the given userId is the room creator
+func (r *Room) IsCreator(userID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.CreatedBy == userID
+}
+
+// HasPassword: checks if the room is password-protected
+func (r *Room) HasPassword() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.Password != ""
+}
+
+// CanEdit: checks if a user can edit objects based on room permissions
+func (r *Room) CanEdit(userID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Creator always has full permissions
+	if r.CreatedBy == userID {
+		return true
+	}
+
+	// If view-only mode, non-creators cannot edit
+	if r.Permissions.ViewOnly {
+		return false
+	}
+
+	return true
+}
+
+// CanEditObject: checks if a user can edit a specific object
+func (r *Room) CanEditObject(userID string, objectID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Creator always has full permissions
+	if r.CreatedBy == userID {
+		return true
+	}
+
+	// If view-only mode, non-creators cannot edit
+	if r.Permissions.ViewOnly {
+		return false
+	}
+
+	// If OnlyEditOwn mode, check object ownership
+	if r.Permissions.OnlyEditOwn {
+		obj, exists := r.Objects[objectID]
+		if !exists {
+			return true // Allow creating new objects
+		}
+		return obj.UserID == userID
+	}
+
+	return true
 }

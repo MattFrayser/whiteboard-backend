@@ -27,6 +27,11 @@ func NewObjectHandler(validator *object.Validator, config *middleware.RateLimit,
 
 // HandleAdded: objectAdded messages
 func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string]interface{}) error {
+	// Check permissions: Can this user add objects?
+	if !rm.CanEdit(u.ID) {
+		return fmt.Errorf("permission denied: room is view-only")
+	}
+
 	// Check object limit before adding
 	if !h.config.CanAddObject(rm) {
 		return fmt.Errorf("room at maximum object capacity")
@@ -102,6 +107,11 @@ func (h *ObjectHandler) HandleUpdated(rm *room.Room, u *user.User, data map[stri
 		return fmt.Errorf("missing object id")
 	}
 
+	// Check permissions: Can this user edit this specific object?
+	if !rm.CanEditObject(u.ID, id) {
+		return fmt.Errorf("permission denied: cannot edit this object")
+	}
+
 	objData, ok := objectMsg["data"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("missing or invalid object data")
@@ -142,6 +152,11 @@ func (h *ObjectHandler) HandleDeleted(rm *room.Room, u *user.User, data map[stri
 	objectID, ok := data["objectId"].(string)
 	if !ok {
 		return fmt.Errorf("missing objectId")
+	}
+
+	// Check permissions: Can this user delete this specific object?
+	if !rm.CanEditObject(u.ID, objectID) {
+		return fmt.Errorf("permission denied: cannot delete this object")
 	}
 
 	// Delete object from room
