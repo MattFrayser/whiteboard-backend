@@ -302,30 +302,34 @@ func handleCreateRoom(roomCode string, userID string, msgData map[string]interfa
 	return nil
 }
 
-// HandleWebSocket: upgrades HTTP to WebSocket and joins the room
-func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfig) {
+// checkConnectionLimits verifies IP rate limits and global connection capacity
+// Returns error if limits are exceeded
+func checkConnectionLimits(r *http.Request, cfg *WebSocketConfig) error {
 	// Check if rate limited
 	clientIP := GetClientIP(r)
 	if !cfg.IPRateLimiter.Allow(clientIP) {
 		log.Printf("Rate limit exceeded for IP: %s", clientIP)
-		http.Error(w, "Too many connections", http.StatusTooManyRequests)
-		return
+		return fmt.Errorf("rate_limit_exceeded")
 	}
 
 	// Check global connection limit
 	if cfg.ConnTracker != nil && !cfg.ConnTracker.CanConnect() {
 		log.Printf("Global connection limit reached. Current: %d/%d", cfg.ConnTracker.Count(), cfg.ConnTracker.GetMaxConnections())
-		http.Error(w, "Server at capacity. Please try again later.", http.StatusServiceUnavailable)
-		return
+		return fmt.Errorf("connection_limit_reached")
 	}
 
 	// Acquire global connection slot
 	if cfg.ConnTracker != nil && !cfg.ConnTracker.Connect() {
 		log.Printf("Failed to acquire connection slot")
-		http.Error(w, "Server at capacity. Please try again later.", http.StatusServiceUnavailable)
-		return
+		return fmt.Errorf("connection_slot_failed")
 	}
 
+	return nil
+}
+
+// establishSession validates existing session or creates new one, rotates tokens if needed, and sets cookies
+// Returns sessionToken, isNewUser flag, and error
+func establishSession(r *http.Request, w http.ResponseWriter, cfg *WebSocketConfig) (string, bool, error) {
 	// Extract session token from cookie (for returning users)
 	var existingToken string
 	cookie, err := r.Cookie("whiteboard_session_token")
@@ -391,37 +395,22 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 	isSecure := r.TLS != nil
 	setSessionCookie(w, sessionToken, isSecure)
 
-	// Upgrade connection with Set-Cookie header already sent
-	conn, err := cfg.Upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("Error: Failed to upgrade connection - %v", err)
-		return
-	}
+	return sessionToken, isNewUser, nil
+}
 
-	// Create cancellable context for this connection (for graceful shutdown)
-	connCtx, connCancel := context.WithCancel(context.Background())
-	defer connCancel()
-
-	// Register connection for graceful shutdown tracking
-	if cfg.ConnRegistry != nil {
-		cfg.ConnRegistry.Register(conn, connCancel)
-		defer cfg.ConnRegistry.Unregister(conn)
-	}
-
-	defer conn.Close()
-
-	// Retrieve roomCode from URL
-	roomCode := r.URL.Query().Get("room")
-	if roomCode == "" {
-		log.Println("Error: No room code provided")
-		return
-	}
+// authenticateConnection completes the authentication handshake and creates/retrieves user session
+// Returns User object, UserSession, and error
+func authenticateConnection(conn *websocket.Conn, sessionToken string, isNewUser bool, roomCode string, cfg *WebSocketConfig) (*user.User, *user.UserSession, error) {
+	// Generate fingerprint from the connection's User-Agent
+	// Note: We already generated it in establishSession, but we need it again here for session creation
+	// In a future refactor, we could pass this through to avoid regeneration
+	userAgent := "" // We don't have direct access to r here, fingerprint was already validated in establishSession
+	fingerprint := user.GenerateFingerprint(userAgent)
 
 	// Complete authentication handshake (read authenticate message)
 	authResult, err := cfg.Authenticator.Authenticate(conn, sessionToken, 5*time.Second)
 	if err != nil {
-		log.Printf("Error: Authentication failed - %v", err)
-		return
+		return nil, nil, fmt.Errorf("authentication failed: %w", err)
 	}
 
 	// Override isNewUser flag from our pre-validation
@@ -450,9 +439,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 		Session:    session,
 		Connection: conn,
 	}
-	// Ensure cleanup on all exit paths (before room join)
-	var rm *room.Room
-	defer cleanup(rm, u, cfg.SessionMgr, cfg.ConnTracker)
 
 	// Send authentication response (token is in HTTP-only cookie, not in message)
 	response := map[string]interface{}{
@@ -462,14 +448,18 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 	}
 	responseMsg, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Error: Failed to marshal auth response - %v", err)
-		return
+		return nil, nil, fmt.Errorf("failed to marshal auth response: %w", err)
 	}
 	if err := u.WriteMessage(websocket.TextMessage, responseMsg); err != nil {
-		log.Printf("Error: Failed to send auth response - %v", err)
-		return
+		return nil, nil, fmt.Errorf("failed to send auth response: %w", err)
 	}
 
+	return u, session, nil
+}
+
+// handleRoomIntent reads the client's intent (createRoom or joinRoom) and handles room creation if needed
+// Returns intent type, the message data for password verification, and error
+func handleRoomIntent(conn *websocket.Conn, user *user.User, roomCode string, cfg *WebSocketConfig) (string, []byte, error) {
 	// Wait for client to declare intent: createRoom or joinRoom
 	// Client has 3 seconds to send intent message
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
@@ -487,20 +477,126 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 
 				// Handle createRoom message
 				if msgType == "createRoom" {
-					log.Printf("Received createRoom message from user %s", u.ID)
-					if err := handleCreateRoom(roomCode, u.ID, msgData, cfg); err != nil {
+					log.Printf("Received createRoom message from user %s", user.ID)
+					if err := handleCreateRoom(roomCode, user.ID, msgData, cfg); err != nil {
 						log.Printf("Error creating room with settings: %v", err)
-						sendError(u, "ROOM_CREATE_FAILED", "Failed to create room: "+err.Error())
-						return
+						sendError(user, "ROOM_CREATE_FAILED", "Failed to create room: "+err.Error())
+						return "", nil, fmt.Errorf("room creation failed: %w", err)
 					}
 				}
 			}
 		}
 	} else {
 		// Timeout or read error - default to joinRoom behavior
-		log.Printf("No intent message received from user %s (timeout), defaulting to joinRoom", u.ID)
+		log.Printf("No intent message received from user %s (timeout), defaulting to joinRoom", user.ID)
 	}
 
+	return intentType, nextMsg, nil
+}
+
+// verifyRoomPassword handles password verification for password-protected rooms with retry logic
+// Takes the initial message from handleRoomIntent that might contain the password
+// Returns error if verification fails or max attempts exceeded
+func verifyRoomPassword(conn *websocket.Conn, room *room.Room, session *user.UserSession, roomCode string, user *user.User, nextMsg []byte) error {
+	log.Printf("Room %s is password-protected, checking credentials", roomCode)
+
+	// Check if user has already verified this room in their session
+	passwordVerified := false
+	if verifiedTime, exists := session.VerifiedRooms[roomCode]; exists {
+		// Check if verification is still valid (within session lifetime)
+		if time.Since(verifiedTime) < 1*time.Hour {
+			passwordVerified = true
+			log.Printf("User %s: Already verified for room %s (verified at %v)", user.ID, roomCode, verifiedTime)
+		} else {
+			// Verification expired, remove it
+			delete(session.VerifiedRooms, roomCode)
+			log.Printf("User %s: Verification expired for room %s", user.ID, roomCode)
+		}
+	}
+
+	const maxPasswordAttempts = 3
+	passwordAttempts := 0
+
+	// Password verification loop - allow multiple attempts
+	for !passwordVerified && passwordAttempts < maxPasswordAttempts {
+		// Extract password from message
+		var password string
+		var msgData map[string]interface{}
+		if nextMsg != nil && json.Unmarshal(nextMsg, &msgData) == nil {
+			if pwd, ok := msgData["password"].(string); ok {
+				password = pwd
+			}
+		}
+
+		// Check if password was provided
+		if password == "" {
+			log.Printf("User %s: No password provided for protected room %s (attempt %d)", user.ID, roomCode, passwordAttempts+1)
+			sendError(user, "PASSWORD_REQUIRED", "This room requires a password")
+
+			// Wait for client to send another joinRoom message with password
+			conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // 30 second timeout for password entry
+			var err error
+			_, nextMsg, err = conn.ReadMessage()
+			conn.SetReadDeadline(time.Time{}) // Reset deadline
+
+			if err != nil {
+				log.Printf("User %s: Timeout waiting for password or connection error: %v", user.ID, err)
+				sendError(user, "AUTH_TIMEOUT", "Password entry timeout")
+				return fmt.Errorf("password entry timeout")
+			}
+
+			passwordAttempts++
+			continue
+		}
+
+		// Verify password
+		if !auth.VerifyPassword(room.Password, password) {
+			passwordAttempts++
+			log.Printf("User %s: Invalid password for room %s (attempt %d/%d)", user.ID, roomCode, passwordAttempts, maxPasswordAttempts)
+
+			if passwordAttempts >= maxPasswordAttempts {
+				log.Printf("User %s: Maximum password attempts exceeded for room %s", user.ID, roomCode)
+				sendError(user, "MAX_ATTEMPTS_EXCEEDED", "Maximum password attempts exceeded")
+				return fmt.Errorf("max password attempts exceeded")
+			}
+
+			sendError(user, "INVALID_PASSWORD", "Incorrect password")
+
+			// Wait for client to send another joinRoom message with password
+			conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // 30 second timeout for password retry
+			var err error
+			_, nextMsg, err = conn.ReadMessage()
+			conn.SetReadDeadline(time.Time{}) // Reset deadline
+
+			if err != nil {
+				log.Printf("User %s: Timeout waiting for password retry or connection error: %v", user.ID, err)
+				sendError(user, "AUTH_TIMEOUT", "Password entry timeout")
+				return fmt.Errorf("password retry timeout")
+			}
+
+			continue
+		}
+
+		// Password verified successfully
+		passwordVerified = true
+		// Store verification in session for seamless reconnection
+		session.VerifiedRooms[roomCode] = time.Now()
+		log.Printf("User %s: Password verified for room %s (stored in session)", user.ID, roomCode)
+	}
+
+	if !passwordVerified {
+		// Should never reach here due to loop condition, but added for safety
+		log.Printf("User %s: Password verification failed for room %s", user.ID, roomCode)
+		sendError(user, "AUTH_FAILED", "Authentication failed")
+		return fmt.Errorf("authentication failed")
+	}
+
+	return nil
+}
+
+// handleRoomJoin handles the logic of joining or creating a room
+// Returns the room object and error
+func handleRoomJoin(user *user.User, session *user.UserSession, roomCode string, intentType string, cfg *WebSocketConfig) (*room.Room, error) {
 	// Handle join logic
 	if intentType == "joinRoom" || intentType == "createRoom" {
 		// Check if room exists
@@ -508,129 +604,42 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 
 		// If intent is joinRoom and room doesn't exist, return error
 		if intentType == "joinRoom" && !roomExists {
-			log.Printf("User %s tried to join non-existent room: %s", u.ID, roomCode)
-			sendError(u, "ROOM_NOT_FOUND", fmt.Sprintf("Room %s not found. Please check the room code.", roomCode))
-			return
-		}
-
-		// Check password if room exists and is password-protected
-		if roomExists && existingRoom.HasPassword() {
-			log.Printf("Room %s is password-protected, checking credentials", roomCode)
-
-			// Check if user has already verified this room in their session
-			passwordVerified := false
-			if verifiedTime, exists := session.VerifiedRooms[roomCode]; exists {
-				// Check if verification is still valid (within session lifetime)
-				if time.Since(verifiedTime) < 1*time.Hour {
-					passwordVerified = true
-					log.Printf("User %s: Already verified for room %s (verified at %v)", u.ID, roomCode, verifiedTime)
-				} else {
-					// Verification expired, remove it
-					delete(session.VerifiedRooms, roomCode)
-					log.Printf("User %s: Verification expired for room %s", u.ID, roomCode)
-				}
-			}
-
-			const maxPasswordAttempts = 3
-			passwordAttempts := 0
-
-			// Password verification loop - allow multiple attempts
-			for !passwordVerified && passwordAttempts < maxPasswordAttempts {
-				// Extract password from message
-				var password string
-				var msgData map[string]interface{}
-				if nextMsg != nil && json.Unmarshal(nextMsg, &msgData) == nil {
-					if pwd, ok := msgData["password"].(string); ok {
-						password = pwd
-					}
-				}
-
-				// Check if password was provided
-				if password == "" {
-					log.Printf("User %s: No password provided for protected room %s (attempt %d)", u.ID, roomCode, passwordAttempts+1)
-					sendError(u, "PASSWORD_REQUIRED", "This room requires a password")
-
-					// Wait for client to send another joinRoom message with password
-					conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // 30 second timeout for password entry
-					_, nextMsg, err = conn.ReadMessage()
-					conn.SetReadDeadline(time.Time{}) // Reset deadline
-
-					if err != nil {
-						log.Printf("User %s: Timeout waiting for password or connection error: %v", u.ID, err)
-						sendError(u, "AUTH_TIMEOUT", "Password entry timeout")
-						return
-					}
-
-					passwordAttempts++
-					continue
-				}
-
-				// Verify password
-				if !auth.VerifyPassword(existingRoom.Password, password) {
-					passwordAttempts++
-					log.Printf("User %s: Invalid password for room %s (attempt %d/%d)", u.ID, roomCode, passwordAttempts, maxPasswordAttempts)
-
-					if passwordAttempts >= maxPasswordAttempts {
-						log.Printf("User %s: Maximum password attempts exceeded for room %s", u.ID, roomCode)
-						sendError(u, "MAX_ATTEMPTS_EXCEEDED", "Maximum password attempts exceeded")
-						return
-					}
-
-					sendError(u, "INVALID_PASSWORD", "Incorrect password")
-
-					// Wait for client to send another joinRoom message with password
-					conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // 30 second timeout for password retry
-					_, nextMsg, err = conn.ReadMessage()
-					conn.SetReadDeadline(time.Time{}) // Reset deadline
-
-					if err != nil {
-						log.Printf("User %s: Timeout waiting for password retry or connection error: %v", u.ID, err)
-						sendError(u, "AUTH_TIMEOUT", "Password entry timeout")
-						return
-					}
-
-					continue
-				}
-
-				// Password verified successfully
-				passwordVerified = true
-				// Store verification in session for seamless reconnection
-				session.VerifiedRooms[roomCode] = time.Now()
-				log.Printf("User %s: Password verified for room %s (stored in session)", u.ID, roomCode)
-			}
-
-			if !passwordVerified {
-				// Should never reach here due to loop condition, but added for safety
-				log.Printf("User %s: Password verification failed for room %s", u.ID, roomCode)
-				sendError(u, "AUTH_FAILED", "Authentication failed")
-				return
-			}
+			log.Printf("User %s tried to join non-existent room: %s", user.ID, roomCode)
+			sendError(user, "ROOM_NOT_FOUND", fmt.Sprintf("Room %s not found. Please check the room code.", roomCode))
+			return nil, fmt.Errorf("room not found")
 		}
 
 		// Join room (will create if doesn't exist and was createRoom intent)
+		var rm *room.Room
 		var joinErr error
 		if roomExists {
 			rm = existingRoom
-			joinErr = rm.Join(u, cfg.RateLimit.MaxRoomSize)
+			joinErr = rm.Join(user, cfg.RateLimit.MaxRoomSize)
 		} else {
 			// Room doesn't exist, use JoinRoom which will create it
-			rm, joinErr = cfg.RoomManager.JoinRoom(roomCode, session, u, cfg.RateLimit)
+			rm, joinErr = cfg.RoomManager.JoinRoom(roomCode, session, user, cfg.RateLimit)
 		}
 
 		if joinErr != nil {
 			log.Printf("Error: Failed to join room (%s) - %v", roomCode, joinErr)
-			sendError(u, "ROOM_JOIN_FAILED", "Failed to join room: "+joinErr.Error())
-			return
+			sendError(user, "ROOM_JOIN_FAILED", "Failed to join room: "+joinErr.Error())
+			return nil, fmt.Errorf("failed to join room: %w", joinErr)
 		}
-	} else {
-		// Unknown intent type
-		log.Printf("Unknown intent type from user %s: %s", u.ID, intentType)
-		sendError(u, "INVALID_INTENT", "Invalid intent type")
-		return
+
+		return rm, nil
 	}
 
+	// Unknown intent type
+	log.Printf("Unknown intent type from user %s: %s", user.ID, intentType)
+	sendError(user, "INVALID_INTENT", "Invalid intent type")
+	return nil, fmt.Errorf("invalid intent type")
+}
+
+// syncNewUser sends the room_joined message with user color and syncs room state to the new user
+// Returns error if sync fails (non-fatal - user can continue)
+func syncNewUser(room *room.Room, user *user.User, roomCode string, cfg *WebSocketConfig) error {
 	// Send room-specific color after joining
-	userColor := rm.GetUserColor(u.ID)
+	userColor := room.GetUserColor(user.ID)
 
 	colorResponse := map[string]interface{}{
 		"type":  "room_joined",
@@ -640,17 +649,107 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 	colorMsg, err := json.Marshal(colorResponse)
 	if err != nil {
 		log.Printf("Error: Failed to marshal room joined response - %v", err)
-		return
+		return fmt.Errorf("failed to marshal room joined response: %w", err)
 	}
-	if err := u.WriteMessage(websocket.TextMessage, colorMsg); err != nil {
+	if err := user.WriteMessage(websocket.TextMessage, colorMsg); err != nil {
 		log.Printf("Error: Failed to send room joined response - %v", err)
-		return
+		return fmt.Errorf("failed to send room joined response: %w", err)
 	}
 
 	// Sync room state to new user
-	if err := cfg.Synchronizer.SyncNewUser(rm, u); err != nil {
-		log.Printf("Error: Failed to sync room state to user %s - %v", u.ID, err)
-		// Don't return - allow user to continue even if sync fails
+	if err := cfg.Synchronizer.SyncNewUser(room, user); err != nil {
+		log.Printf("Error: Failed to sync room state to user %s - %v", user.ID, err)
+		// Don't return error - allow user to continue even if sync fails
+		// Just log the error
+	}
+
+	return nil
+}
+
+// HandleWebSocket: upgrades HTTP to WebSocket and joins the room
+func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfig) {
+	// Pre-connection checks: rate limiting and capacity
+	if err := checkConnectionLimits(r, cfg); err != nil {
+		if err.Error() == "rate_limit_exceeded" {
+			http.Error(w, "Too many connections", http.StatusTooManyRequests)
+		} else {
+			http.Error(w, "Server at capacity. Please try again later.", http.StatusServiceUnavailable)
+		}
+		return
+	}
+
+	// Establish or validate session, set cookie
+	sessionToken, isNewUser, err := establishSession(r, w, cfg)
+	if err != nil {
+		log.Printf("Error: Failed to establish session - %v", err)
+		http.Error(w, "Session error", http.StatusInternalServerError)
+		return
+	}
+
+	// Upgrade connection with Set-Cookie header already sent
+	conn, err := cfg.Upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Error: Failed to upgrade connection - %v", err)
+		return
+	}
+
+	// Create cancellable context for this connection (for graceful shutdown)
+	connCtx, connCancel := context.WithCancel(context.Background())
+	defer connCancel()
+
+	// Register connection for graceful shutdown tracking
+	if cfg.ConnRegistry != nil {
+		cfg.ConnRegistry.Register(conn, connCancel)
+		defer cfg.ConnRegistry.Unregister(conn)
+	}
+
+	defer conn.Close()
+
+	// Retrieve roomCode from URL
+	roomCode := r.URL.Query().Get("room")
+	if roomCode == "" {
+		log.Println("Error: No room code provided")
+		return
+	}
+
+	// Authenticate connection and create user
+	u, session, err := authenticateConnection(conn, sessionToken, isNewUser, roomCode, cfg)
+	if err != nil {
+		log.Printf("Error: %v", err)
+		return
+	}
+
+	// Ensure cleanup on all exit paths (before room join)
+	var rm *room.Room
+	defer cleanup(rm, u, cfg.SessionMgr, cfg.ConnTracker)
+
+	// Handle client intent (createRoom or joinRoom)
+	intentType, nextMsg, err := handleRoomIntent(conn, u, roomCode, cfg)
+	if err != nil {
+		log.Printf("Error: %v", err)
+		return
+	}
+
+	// Check if room exists and is password-protected
+	existingRoom, roomExists := cfg.RoomManager.GetRoom(roomCode)
+	if roomExists && existingRoom.HasPassword() {
+		if err := verifyRoomPassword(conn, existingRoom, session, roomCode, u, nextMsg); err != nil {
+			log.Printf("Error: %v", err)
+			return
+		}
+	}
+
+	// Join or create room
+	rm, err = handleRoomJoin(u, session, roomCode, intentType, cfg)
+	if err != nil {
+		log.Printf("Error: %v", err)
+		return
+	}
+
+	// Send room joined message and sync state to new user
+	if err := syncNewUser(rm, u, roomCode, cfg); err != nil {
+		log.Printf("Error: %v", err)
+		return
 	}
 
 	// Start message processing loop

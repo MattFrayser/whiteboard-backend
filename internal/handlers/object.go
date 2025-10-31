@@ -25,46 +25,80 @@ func NewObjectHandler(validator *object.Validator, config *middleware.RateLimit,
 	}
 }
 
+// sendErrorAck: helper function to send error acknowledgment to user
+func (h *ObjectHandler) sendErrorAck(u *user.User, objectID string, errorMsg string) {
+	ackMsg := map[string]interface{}{
+		"type":     "objectAdded_error",
+		"objectId": objectID,
+		"success":  false,
+		"error":    errorMsg,
+	}
+	ackData, err := json.Marshal(ackMsg)
+	if err != nil {
+		fmt.Printf("Failed to marshal error ACK message: %v\n", err)
+		return
+	}
+	if err := u.WriteMessage(1, ackData); err != nil {
+		fmt.Printf("Failed to send error ACK to user %s: %v\n", u.ID, err)
+	}
+}
+
 // HandleAdded: objectAdded messages
 func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string]interface{}) error {
+	// Extract object ID early so we can use it in error ACKs
+	var objectID string
+	if objectMsg, ok := data["object"].(map[string]interface{}); ok {
+		if id, ok := objectMsg["id"].(string); ok {
+			objectID = id
+		}
+	}
+
 	// Check permissions: Can this user add objects?
 	if !rm.CanEdit(u.ID) {
+		h.sendErrorAck(u, objectID, "permission denied: room is view-only")
 		return fmt.Errorf("permission denied: room is view-only")
 	}
 
 	// Check object limit before adding
 	if !h.config.CanAddObject(rm) {
+		h.sendErrorAck(u, objectID, "room at maximum object capacity")
 		return fmt.Errorf("room at maximum object capacity")
 	}
 
 	objectMsg, ok := data["object"].(map[string]interface{})
 	if !ok {
+		h.sendErrorAck(u, objectID, "missing object data")
 		return fmt.Errorf("missing object data")
 	}
 
 	id, ok := objectMsg["id"].(string)
 	if !ok {
+		h.sendErrorAck(u, objectID, "missing object id")
 		return fmt.Errorf("missing object id")
 	}
 
 	objType, ok := objectMsg["type"].(string)
 	if !ok {
+		h.sendErrorAck(u, id, "missing or invalid object type")
 		return fmt.Errorf("missing or invalid object type")
 	}
 
 	objData, ok := objectMsg["data"].(map[string]interface{})
 	if !ok {
+		h.sendErrorAck(u, id, "missing or invalid object data")
 		return fmt.Errorf("missing or invalid object data")
 	}
 
 	// Validate and sanitize object data using schema validation
 	sanitizedData, err := h.validator.ValidateAndSanitize(objType, objData)
 	if err != nil {
+		h.sendErrorAck(u, id, fmt.Sprintf("object validation failed: %v", err))
 		return fmt.Errorf("object validation failed: %w", err)
 	}
 
 	zIndexFloat, ok := objectMsg["zIndex"].(float64)
 	if !ok {
+		h.sendErrorAck(u, id, "missing or invalid zIndex")
 		return fmt.Errorf("missing or invalid zIndex")
 	}
 
@@ -86,12 +120,31 @@ func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string
 	data["object"] = objectMsg
 	data["userId"] = u.ID
 
-	// Broadcast
+	// Broadcast to other users
 	msg, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal broadcast message: %w", err)
 	}
 	h.broadcaster.Broadcast(rm, msg, u.Connection)
+
+	// Send acknowledgment back to sender
+	ackMsg := map[string]interface{}{
+		"type":     "objectAdded_ack",
+		"objectId": id,
+		"success":  true,
+	}
+	ackData, err := json.Marshal(ackMsg)
+	if err != nil {
+		// Log error but don't fail the operation since object was added successfully
+		fmt.Printf("Failed to marshal ACK message: %v\n", err)
+		return nil
+	}
+
+	if err := u.WriteMessage(1, ackData); err != nil {
+		// Log error but don't fail since object was added and broadcast successfully
+		fmt.Printf("Failed to send ACK to user %s: %v\n", u.ID, err)
+	}
+
 	return nil
 }
 
