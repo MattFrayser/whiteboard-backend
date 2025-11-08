@@ -1,9 +1,9 @@
 package room
 
 import (
-	"log"
 	"sync"
 
+	"main/internal/logger"
 	"main/internal/user"
 
 	"github.com/gorilla/websocket"
@@ -48,7 +48,10 @@ func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocke
 			defer wg.Done()
 
 			if err := usr.WriteMessage(websocket.TextMessage, msg); err != nil {
-				log.Printf("Broadcast failed for user %s: %v", usr.ID, err)
+				logger.Error("Broadcast failed for user").
+					Str("user_id", usr.ID).
+					Err(err).
+					Msg("")
 				mu.Lock()
 				failedUsers = append(failedUsers, usr)
 				mu.Unlock()

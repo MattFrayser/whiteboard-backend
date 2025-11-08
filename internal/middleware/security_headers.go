@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"net/http"
+	"os"
+	"strings"
 )
 
 // SecurityHeaders adds security headers to all HTTP responses
@@ -17,11 +19,29 @@ func NewSecurityHeaders(next http.Handler) *SecurityHeaders {
 // ServeHTTP implements the http.Handler interface
 func (sh *SecurityHeaders) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Content Security Policy - prevent XSS attacks
-	// Allow scripts only from self, inline scripts (for Vite), and unsafe-eval (for dev)
+	// Use environment-aware CSP: strict in production, permissive only for Vite dev server
+	environment := strings.ToLower(os.Getenv("ENVIRONMENT"))
+	if environment == "" {
+		environment = "development"
+	}
+	isDev := environment == "development" || environment == "dev"
+
+	var scriptSrc, styleSrc string
+	if isDev {
+		// Development: Allow inline scripts and eval for Vite HMR (hot module reload)
+		scriptSrc = "'self' 'unsafe-inline' 'unsafe-eval'"
+		styleSrc = "'self' 'unsafe-inline'"
+	} else {
+		// Production: Strict CSP - no inline scripts or eval
+		scriptSrc = "'self'"
+		// Keep unsafe-inline for styles (color swatches) - low security risk
+		styleSrc = "'self' 'unsafe-inline'"
+	}
+
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; "+
-			"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
-			"style-src 'self' 'unsafe-inline'; "+
+			"script-src "+scriptSrc+"; "+
+			"style-src "+styleSrc+"; "+
 			"img-src 'self' data: blob:; "+
 			"font-src 'self' data:; "+
 			"connect-src 'self' ws: wss:; "+

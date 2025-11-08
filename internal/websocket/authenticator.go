@@ -3,7 +3,6 @@ package transport
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"main/internal/user"
@@ -60,7 +59,6 @@ func (a *Authenticator) Authenticate(conn *websocket.Conn, token string, timeout
 		userID, valid := a.sessionMgr.ValidateToken(token)
 		if valid {
 			// Returning user with valid session
-			log.Printf("Returning user authenticated: %s", userID)
 			return &AuthResult{
 				UserID:       userID,
 				SessionToken: token,
@@ -71,7 +69,6 @@ func (a *Authenticator) Authenticate(conn *websocket.Conn, token string, timeout
 
 	// New user - token will be added to session manager after this returns
 	userID := user.GenerateUUID()
-	log.Printf("New user created: %s", userID)
 	return &AuthResult{
 		UserID:       userID,
 		SessionToken: token, // Use the pre-generated token from HandleWebSocket

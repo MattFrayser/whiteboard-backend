@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"main/internal/handlers"
+	"main/internal/logger"
 	"main/internal/middleware"
 	"main/internal/object"
 	"main/internal/room"
@@ -26,8 +26,18 @@ func main() {
 
 	godotenv.Load()
 
+	// Initialize structured logging
+	logger.Init()
+
 	// Parse allowed domains from environment
 	allowedDomains := strings.Split(os.Getenv("DOMAINS"), ",")
+
+	// Determine environment mode
+	environment := os.Getenv("ENVIRONMENT")
+	if environment == "" {
+		environment = "development"
+	}
+	isProduction := environment == "production"
 
 	// Initialize rate limiting configuration
 	config := middleware.NewRateLimit(
@@ -77,7 +87,9 @@ func main() {
 		// Check IP rate limit for session endpoint
 		clientIP := transport.GetClientIP(r)
 		if !ipRateLimiter.Allow(clientIP) {
-			log.Printf("Session endpoint rate limit exceeded for IP: %s", clientIP)
+			logger.Warn("Session endpoint rate limit exceeded").
+				Str("ip", clientIP).
+				Msg("")
 			http.Error(w, "Too many requests. Please try again later.", http.StatusTooManyRequests)
 			return
 		}
@@ -101,6 +113,13 @@ func main() {
 	certFile := os.Getenv("TLS_CERT_FILE")
 	keyFile := os.Getenv("TLS_KEY_FILE")
 	useTLS := certFile != "" && keyFile != ""
+
+	// Enforce TLS in production
+	if isProduction && !useTLS {
+		logger.Fatal("TLS is required in production mode").
+			Str("environment", "production").
+			Msg("Set TLS_CERT_FILE and TLS_KEY_FILE environment variables")
+	}
 
 	// Create http.Server instance for graceful shutdown support
 	var server *http.Server
@@ -126,17 +145,45 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	// Start HTTP to HTTPS redirect server in production
+	var redirectServer *http.Server
+	if useTLS && isProduction {
+		redirectServer = &http.Server{
+			Addr:         ":8080",
+			Handler:      http.HandlerFunc(redirectToHTTPS),
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+		}
+		go func() {
+			logger.Info("HTTP redirect server started").
+				Str("from", ":8080").
+				Str("to", ":8443").
+				Msg("")
+			if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("Redirect server error").
+					Err(err).
+					Msg("")
+			}
+		}()
+	}
+
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
 	go func() {
 		if useTLS {
-			log.Println("Server started on :8443 (HTTPS/WSS)")
-			log.Println("Press Ctrl+C to shutdown gracefully")
+			logger.Info("Server started").
+				Str("addr", ":8443").
+				Str("protocol", "HTTPS/WSS").
+				Msg("Press Ctrl+C to shutdown gracefully")
 			serverErr <- server.ListenAndServeTLS(certFile, keyFile)
 		} else {
-			log.Println("Server started on :8080 (HTTP/WS)")
-			log.Println("WARNING: TLS not enabled. Set TLS_CERT_FILE and TLS_KEY_FILE environment variables for production.")
-			log.Println("Press Ctrl+C to shutdown gracefully")
+			logger.Info("Server started").
+				Str("addr", ":8080").
+				Str("protocol", "HTTP/WS").
+				Msg("Press Ctrl+C to shutdown gracefully")
+			logger.Warn("TLS not enabled").
+				Str("environment", environment).
+				Msg("Use ENVIRONMENT=production with TLS_CERT_FILE and TLS_KEY_FILE for production")
 			serverErr <- server.ListenAndServe()
 		}
 	}()
@@ -144,10 +191,13 @@ func main() {
 	// Wait for shutdown signal or server error
 	select {
 	case <-sigChan:
-		log.Println("\nShutdown signal received, initiating graceful shutdown...")
+		logger.Info("Shutdown signal received").
+			Msg("Initiating graceful shutdown")
 	case err := <-serverErr:
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+			logger.Fatal("Server error").
+				Err(err).
+				Msg("")
 		}
 		return
 	}
@@ -156,26 +206,38 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	// Shutdown HTTP server (stops accepting new connections)
-	log.Println("Stopping HTTP server...")
+	// Shutdown HTTP servers (stops accepting new connections)
+	logger.Info("Stopping HTTP server").Msg("")
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
+		logger.Error("Server shutdown error").
+			Err(err).
+			Msg("")
+	}
+
+	// Shutdown redirect server if running
+	if redirectServer != nil {
+		logger.Info("Stopping HTTP redirect server").Msg("")
+		if err := redirectServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Redirect server shutdown error").
+				Err(err).
+				Msg("")
+		}
 	}
 
 	// Close all WebSocket connections gracefully
-	log.Println("Closing all WebSocket connections...")
+	logger.Info("Closing all WebSocket connections").Msg("")
 	wsShutdownCtx, wsShutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer wsShutdownCancel()
 	connRegistry.CloseAll(wsShutdownCtx)
 
 	// Cancel context to stop cleanup goroutines
-	log.Println("Stopping background cleanup routines...")
+	logger.Info("Stopping background cleanup routines").Msg("")
 	cancel()
 
 	// Wait a moment for cleanup goroutines to exit gracefully
 	time.Sleep(100 * time.Millisecond)
 
-	log.Println("Shutdown complete")
+	logger.Info("Shutdown complete").Msg("")
 }
 
 // cleanupRooms: periodically removes expired rooms
@@ -189,7 +251,7 @@ func cleanupRooms(ctx context.Context, roomMgr *room.Manager) {
 			return
 		case <-ticker.C:
 			roomMgr.Cleanup()
-			log.Println("Cleaned up expired rooms")
+			logger.Debug("Cleaned up expired rooms").Msg("")
 		}
 	}
 }
@@ -205,7 +267,7 @@ func cleanupSessions(ctx context.Context, sessionMgr *user.SessionManager) {
 			return
 		case <-ticker.C:
 			sessionMgr.Cleanup()
-			log.Println("Cleaned up expired sessions")
+			logger.Debug("Cleaned up expired sessions").Msg("")
 		}
 	}
 }
@@ -221,7 +283,22 @@ func cleanupIPLimiters(ctx context.Context, ipRateLimiter *middleware.IPRateLimi
 			return
 		case <-ticker.C:
 			ipRateLimiter.Cleanup()
-			log.Println("IP rate limiters cleared")
+			logger.Debug("IP rate limiters cleared").Msg("")
 		}
 	}
+}
+
+// redirectToHTTPS: redirects HTTP requests to HTTPS
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	// Remove port if present (strip :8080)
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	// Redirect to HTTPS on port 8443
+	target := "https://" + host + ":8443" + r.URL.Path
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }

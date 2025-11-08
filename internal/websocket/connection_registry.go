@@ -2,9 +2,10 @@ package transport
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
+
+	"main/internal/logger"
 
 	"github.com/gorilla/websocket"
 )
@@ -27,7 +28,6 @@ func (cr *ConnectionRegistry) Register(conn *websocket.Conn, cancel context.Canc
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 	cr.connections[conn] = cancel
-	log.Printf("Connection registered. Total active: %d", len(cr.connections))
 }
 
 // Unregister removes a connection from tracking
@@ -35,7 +35,6 @@ func (cr *ConnectionRegistry) Unregister(conn *websocket.Conn) {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 	delete(cr.connections, conn)
-	log.Printf("Connection unregistered. Total active: %d", len(cr.connections))
 }
 
 // Count returns the number of currently active connections
@@ -53,11 +52,12 @@ func (cr *ConnectionRegistry) CloseAll(ctx context.Context) {
 
 	count := len(cr.connections)
 	if count == 0 {
-		log.Println("No active connections to close")
-		return
+			return
 	}
 
-	log.Printf("Closing %d active WebSocket connection(s)...", count)
+	logger.Info("Closing active WebSocket connections").
+		Int("count", count).
+		Msg("")
 
 	// Create WaitGroup to wait for all close operations
 	var wg sync.WaitGroup
@@ -75,7 +75,9 @@ func (cr *ConnectionRegistry) CloseAll(ctx context.Context) {
 			closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Server shutting down")
 			deadline := time.Now().Add(5 * time.Second)
 			if err := c.WriteControl(websocket.CloseMessage, closeMsg, deadline); err != nil {
-				log.Printf("Error sending close frame: %v", err)
+				logger.Warn("Error sending close frame").
+					Err(err).
+					Msg("")
 			}
 
 			// Close the connection
@@ -92,9 +94,9 @@ func (cr *ConnectionRegistry) CloseAll(ctx context.Context) {
 
 	select {
 	case <-done:
-		log.Println("All WebSocket connections closed successfully")
+		logger.Info("All WebSocket connections closed successfully").Msg("")
 	case <-ctx.Done():
-		log.Println("WebSocket closure timeout reached, forcing close")
+		logger.Warn("WebSocket closure timeout reached, forcing close").Msg("")
 	}
 
 	// Clear the map

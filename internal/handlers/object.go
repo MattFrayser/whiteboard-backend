@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"main/internal/logger"
 	"main/internal/middleware"
 	"main/internal/object"
 	"main/internal/room"
@@ -35,11 +36,16 @@ func (h *ObjectHandler) sendErrorAck(u *user.User, objectID string, errorMsg str
 	}
 	ackData, err := json.Marshal(ackMsg)
 	if err != nil {
-		fmt.Printf("Failed to marshal error ACK message: %v\n", err)
+		logger.Error("Failed to marshal error ACK message").
+		Err(err).
+		Msg("")
 		return
 	}
 	if err := u.WriteMessage(1, ackData); err != nil {
-		fmt.Printf("Failed to send error ACK to user %s: %v\n", u.ID, err)
+		logger.Error("Failed to send error ACK to user").
+		Str("user_id", u.ID).
+		Err(err).
+		Msg("")
 	}
 }
 
@@ -86,7 +92,7 @@ func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string
 	objData, ok := objectMsg["data"].(map[string]interface{})
 	if !ok {
 		h.sendErrorAck(u, id, "missing or invalid object data")
-		return fmt.Errorf("missing or invalid object data")
+		return fmt.Errorf("missing or invalid object data", objectMsg)
 	}
 
 	// Validate and sanitize object data using schema validation
@@ -136,13 +142,18 @@ func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string
 	ackData, err := json.Marshal(ackMsg)
 	if err != nil {
 		// Log error but don't fail the operation since object was added successfully
-		fmt.Printf("Failed to marshal ACK message: %v\n", err)
+		logger.Error("Failed to marshal ACK message").
+		Err(err).
+		Msg("")
 		return nil
 	}
 
 	if err := u.WriteMessage(1, ackData); err != nil {
 		// Log error but don't fail since object was added and broadcast successfully
-		fmt.Printf("Failed to send ACK to user %s: %v\n", u.ID, err)
+		logger.Error("Failed to send ACK to user").
+		Str("user_id", u.ID).
+		Err(err).
+		Msg("")
 	}
 
 	return nil
