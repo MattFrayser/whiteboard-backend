@@ -21,8 +21,21 @@ type RateLimit struct {
 	BurstSize         int
 }
 
+const (
+	maxRoomSize	  = 10
+	maxObjects	  = 5000
+	maxMessageSize 	  = 250000
+	maxRooms	  = 100
+	maxObjectDepth    = 5
+	maxObjectElements = 100
+	messagesPerSecond = 30
+	burstSize	  = 10
+)
+
+
 // NewRateLimit: creates a new RateLimit configuration
-func NewRateLimit(maxRoomSize, maxObjects, maxMessageSize, maxRooms, maxObjectDepth, maxObjectElements int, messagesPerSecond float64, burstSize int) *RateLimit {
+func NewRateLimit() *RateLimit {
+	
 	return &RateLimit{
 		MaxRoomSize:       maxRoomSize,
 		MaxObjects:        maxObjects,

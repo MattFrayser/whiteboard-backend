@@ -11,8 +11,10 @@ type ConnectionTracker struct {
 	mu                sync.RWMutex
 }
 
+const maxConnections = 1000
+
 // NewConnectionTracker creates a new connection tracker with the specified maximum
-func NewConnectionTracker(maxConnections int) *ConnectionTracker {
+func NewConnectionTracker() *ConnectionTracker {
 	return &ConnectionTracker{
 		maxConnections:    maxConnections,
 		activeConnections: 0,
