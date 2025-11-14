@@ -21,7 +21,7 @@ func NewSessionManager() *SessionManager {
 }
 
 // GetOrCreate: gets an existing session or creates a new one
-func (sm *SessionManager) GetOrCreate(userID string, color string, fingerprint string) *UserSession {
+func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -37,8 +37,6 @@ func (sm *SessionManager) GetOrCreate(userID string, color string, fingerprint s
 	session = &UserSession{
 		UserID:            userID,
 		SessionToken:      token,
-		TokenCreatedAt:    now,
-		Fingerprint:       fingerprint,
 		Color:             color,
 		LastSeen:          now,
 		LastCursorUpdate:  time.Time{},
@@ -70,46 +68,6 @@ func (sm *SessionManager) ValidateToken(token string) (string, bool) {
 	// Update last seen
 	session.LastSeen = time.Now()
 	return userID, true
-}
-
-// ShouldRotateToken: checks if a token needs rotation (older than 1 hour)
-func (sm *SessionManager) ShouldRotateToken(userID string) bool {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	session, exists := sm.sessions[userID]
-	if !exists {
-		return false
-	}
-
-	// Rotate if token is older than 1 hour
-	tokenAge := time.Since(session.TokenCreatedAt)
-	return tokenAge > 1*time.Hour
-}
-
-// RotateToken: generates a new token for a user session
-// Returns the new token and true if rotation succeeded
-func (sm *SessionManager) RotateToken(userID string) (string, bool) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	session, exists := sm.sessions[userID]
-	if !exists {
-		return "", false
-	}
-
-	// Remove old token mapping
-	delete(sm.tokenToUserID, session.SessionToken)
-
-	// Generate new token
-	newToken := GenerateSessionToken()
-	session.SessionToken = newToken
-	session.TokenCreatedAt = time.Now()
-
-	// Update token mapping
-	sm.tokenToUserID[newToken] = userID
-
-	return newToken, true
 }
 
 // GetSessionByToken: retrieve session by token

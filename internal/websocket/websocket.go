@@ -58,10 +58,6 @@ func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.Sess
 		existingToken = cookie.Value
 	}
 
-	// Generate fingerprint from User-Agent for validation
-	userAgent := r.Header.Get("User-Agent")
-	fingerprint := user.GenerateFingerprint(userAgent)
-
 	var sessionToken string
 	var userID string
 	var isNewUser bool
@@ -70,40 +66,27 @@ func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.Sess
 		// Validate existing token
 		validUserID, valid := sessionMgr.ValidateToken(existingToken)
 		if valid {
-			// Validate fingerprint to prevent token theft
-			session, sessionExists := sessionMgr.GetSessionByToken(existingToken)
-			if sessionExists && session.Fingerprint != "" && session.Fingerprint != fingerprint {
-				// Fingerprint mismatch - possible token theft
-				logger.Warn("Fingerprint mismatch - generating new session").
-					Str("user_id", validUserID).
-					Msg("")
-				sessionToken = user.GenerateSessionToken()
-				userID = user.GenerateUUID()
-				isNewUser = true
-			} else {
-				// Valid returning user
-				sessionToken = existingToken
-				userID = validUserID
-				isNewUser = false
-			}
+			// Valid returning user
+			sessionToken = existingToken
+			userID = validUserID
+			isNewUser = false
 		} else {
 			// Invalid token, create new one
 			sessionToken = user.GenerateSessionToken()
 			userID = user.GenerateUUID()
 			isNewUser = true
-			}
+		}
 	} else {
 		// No existing token, create new one
 		sessionToken = user.GenerateSessionToken()
 		userID = user.GenerateUUID()
 		isNewUser = true
-		}
+	}
 
 	// Create or update session
 	if isNewUser {
-		session := sessionMgr.GetOrCreate(userID, "", fingerprint)
+		session := sessionMgr.GetOrCreate(userID, "")
 		session.SessionToken = sessionToken
-		session.TokenCreatedAt = time.Now()
 		sessionMgr.UpdateTokenMapping(sessionToken, userID)
 	}
 
@@ -340,7 +323,7 @@ func checkConnectionLimits(r *http.Request, cfg *WebSocketConfig) error {
 	return nil
 }
 
-// establishSession validates existing session or creates new one, rotates tokens if needed, and sets cookies
+// establishSession validates existing session or creates new one, and sets cookies
 // Returns sessionToken, isNewUser flag, and error
 func establishSession(r *http.Request, w http.ResponseWriter, cfg *WebSocketConfig) (string, bool, error) {
 	// Extract session token from cookie (for returning users)
@@ -350,61 +333,27 @@ func establishSession(r *http.Request, w http.ResponseWriter, cfg *WebSocketConf
 		existingToken = cookie.Value
 	}
 
-	// Generate fingerprint from User-Agent for validation
-	userAgent := r.Header.Get("User-Agent")
-	fingerprint := user.GenerateFingerprint(userAgent)
-
 	// Pre-validate token or prepare new one BEFORE upgrade
 	var sessionToken string
 	var isNewUser bool
-	var shouldRotate bool
 
 	if existingToken != "" {
 		// Validate existing token
-		userID, valid := cfg.SessionMgr.ValidateToken(existingToken)
+		_, valid := cfg.SessionMgr.ValidateToken(existingToken)
 		if valid {
-			// Validate fingerprint to prevent token theft
-			session, sessionExists := cfg.SessionMgr.GetSessionByToken(existingToken)
-			if sessionExists && session.Fingerprint != "" && session.Fingerprint != fingerprint {
-				// Fingerprint mismatch - possible token theft
-				logger.Warn("Fingerprint mismatch - rejecting token").
-					Str("user_id", userID).
-					Msg("")
-				sessionToken = user.GenerateSessionToken()
-				isNewUser = true
-			} else {
-				// Fingerprint matches or not set (backward compatibility)
-				// Check if token needs rotation (>1 hour old)
-				shouldRotate = cfg.SessionMgr.ShouldRotateToken(userID)
-				if shouldRotate {
-					// Rotate token
-					newToken, rotated := cfg.SessionMgr.RotateToken(userID)
-					if rotated {
-						sessionToken = newToken
-						logger.Info("Token rotated for user").
-						Str("user_id", userID).
-						Msg("")
-					} else {
-						sessionToken = existingToken
-						logger.Warn("Token rotation failed, using existing token").
-						Str("user_id", userID).
-						Msg("")
-					}
-				} else {
-					sessionToken = existingToken
-				}
-				isNewUser = false
-				}
+			// Valid returning user
+			sessionToken = existingToken
+			isNewUser = false
 		} else {
 			// Invalid token, create new one
 			sessionToken = user.GenerateSessionToken()
 			isNewUser = true
-			}
+		}
 	} else {
 		// No existing token, create new one
 		sessionToken = user.GenerateSessionToken()
 		isNewUser = true
-		}
+	}
 
 	// Set cookie before upgrade (using response headers)
 	// Secure flag should be true in production with TLS
@@ -417,11 +366,6 @@ func establishSession(r *http.Request, w http.ResponseWriter, cfg *WebSocketConf
 // authenticateConnection completes the authentication handshake and creates/retrieves user session
 // Returns User object, UserSession, and error
 func authenticateConnection(conn *websocket.Conn, sessionToken string, isNewUser bool, roomCode string, cfg *WebSocketConfig) (*user.User, *user.UserSession, error) {
-	// Generate fingerprint from the connection's User-Agent
-	// Note: We already generated it in establishSession, but we need it again here for session creation
-	// In a future refactor, we could pass this through to avoid regeneration
-	userAgent := "" // We don't have direct access to r here, fingerprint was already validated in establishSession
-	fingerprint := user.GenerateFingerprint(userAgent)
 
 	// Complete authentication handshake (read authenticate message)
 	authResult, err := cfg.Authenticator.Authenticate(conn, sessionToken, 5*time.Second)
@@ -432,15 +376,14 @@ func authenticateConnection(conn *websocket.Conn, sessionToken string, isNewUser
 	// Override isNewUser flag from our pre-validation
 	authResult.IsNewUser = isNewUser
 
-	// Get or create session (fingerprint already generated above)
+	// Get or create session
 	var session *user.UserSession
 	if authResult.IsNewUser {
 		// Create new session with the generated token
-		session = cfg.SessionMgr.GetOrCreate(authResult.UserID, "", fingerprint)
+		session = cfg.SessionMgr.GetOrCreate(authResult.UserID, "")
 		// Override the token with the one we generated during auth
 		// (GetOrCreate generates its own, but we want to use the auth one)
 		session.SessionToken = authResult.SessionToken
-		session.TokenCreatedAt = time.Now()
 		cfg.SessionMgr.UpdateTokenMapping(authResult.SessionToken, authResult.UserID)
 	} else {
 		// Get existing session for returning user

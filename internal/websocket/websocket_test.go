@@ -182,11 +182,8 @@ func TestEstablishSession(t *testing.T) {
 			existingCookie: "valid-token",
 			setupSession: func(sm *user.SessionManager, cookie string) string {
 				userID := user.GenerateUUID()
-				// Use the same fingerprint that will be generated in the test
-				fingerprint := user.GenerateFingerprint("test-agent")
-				session := sm.GetOrCreate(userID, "", fingerprint)
+				session := sm.GetOrCreate(userID, "")
 				session.SessionToken = cookie
-				session.TokenCreatedAt = time.Now()
 				sm.UpdateTokenMapping(cookie, userID)
 				return userID
 			},

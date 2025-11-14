@@ -2,7 +2,6 @@ package user
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"sync"
 	"time"
@@ -15,8 +14,6 @@ import (
 type UserSession struct {
 	UserID             string
 	SessionToken       string
-	TokenCreatedAt     time.Time     // For token rotation
-	Fingerprint        string        // Browser fingerprint for token validation
 	LastRoom           string
 	LastSeen           time.Time
 	LastCursorUpdate   time.Time
@@ -48,12 +45,6 @@ func GenerateSessionToken() string {
 		panic("Crypto/rand failed: " + err.Error())
 	}
 	return hex.EncodeToString(bytes)
-}
-
-// GenerateFingerprint: creates a fingerprint hash from User-Agent
-func GenerateFingerprint(userAgent string) string {
-	hash := sha256.Sum256([]byte(userAgent))
-	return hex.EncodeToString(hash[:])
 }
 
 // WriteMessage: writes message to WebSocket connection 
