@@ -44,7 +44,7 @@ func setSessionCookie(w http.ResponseWriter, token string, secure bool) {
 // HandleSession establishes a session and sets the session cookie
 // This should be called by the frontend BEFORE opening a WebSocket connection
 // This ensures cookies are reliably stored via regular HTTP response
-func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.SessionManager) {
+func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.SessionManager, behindProxy bool) {
 	// Only allow GET requests
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -90,7 +90,7 @@ func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.Sess
 	}
 
 	// Set cookie
-	isSecure := r.TLS != nil
+	isSecure := isSecureConnection(r, behindProxy)
 	setSessionCookie(w, sessionToken, isSecure)
 
 	// Return JSON response
@@ -853,6 +853,27 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 	// Start message processing loop
 	run(connCtx, conn, rm, u, cfg.RateLimit, cfg.MsgRouter)
 }
+
+// handles direct TLS and proxy
+func isSecureConnection(r *http.Request, behindProxy bool) bool {
+	if r.TLS != nil {
+		return true
+	}
+
+	if !behindProxy {
+		return false
+	}
+
+	// Currently using FLY so the proxy check will be for that
+	if r.Header.Get("Fly-Client-IP") != "" {
+		return true
+	}
+
+
+	// no https
+	return false
+}
+
 
 // run: message loop for WebSocket connections with context for graceful shutdown
 func run(ctx context.Context, conn *websocket.Conn, rm *room.Room, u *user.User, config *middleware.RateLimit, msgRouter *handlers.MessageRouter) {

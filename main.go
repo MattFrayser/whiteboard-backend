@@ -189,7 +189,7 @@ func setupRoutes(cfg *config.Config, deps *Dependencies) {
 			http.Error(w, "Too many requests. Please try again later.", http.StatusTooManyRequests)
 			return
 		}
-		transport.HandleSession(w, r, deps.SessionMgr)
+		transport.HandleSession(w, r, deps.SessionMgr, cfg.BehindProxy)
 	})
 	// Apply CORS to session endpoint for cross-origin requests
 	sessionHandlerWithCORS := middleware.WrapWithCORS(sessionHandler, cfg.AllowedDomains)
