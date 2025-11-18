@@ -85,9 +85,8 @@ func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.Sess
 
 	// Create or update session
 	if isNewUser {
-		session := sessionMgr.GetOrCreate(userID, "")
+		session := sessionMgr.GetOrCreate(userID)
 		session.SessionToken = sessionToken
-		sessionMgr.UpdateTokenMapping(sessionToken, userID)
 	}
 
 	// Set cookie
@@ -371,11 +370,8 @@ func authenticateConnection(conn *websocket.Conn, sessionToken string, isNewUser
 
 	var session *user.UserSession
 	if authResult.IsNewUser {
-		session = cfg.SessionMgr.GetOrCreate(authResult.UserID, "")
-		// Override token with one generated during auth
-		// (GetOrCreate generates its own, but we want to use the auth one)
+		session = cfg.SessionMgr.GetOrCreate(authResult.UserID)
 		session.SessionToken = authResult.SessionToken
-		cfg.SessionMgr.UpdateTokenMapping(authResult.SessionToken, authResult.UserID)
 	} else {
 		session, _ = cfg.SessionMgr.GetSessionByToken(authResult.SessionToken)
 	}

@@ -19,7 +19,6 @@ type UserSession struct {
 	LastCursorUpdate   time.Time
 	ObjectRateLimiter  *rate.Limiter
 	CursorRateLimiter  *rate.Limiter
-	Color              string
 	VerifiedRooms      map[string]time.Time // roomCode -> verification time (for password-protected rooms)
 }
 

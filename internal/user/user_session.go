@@ -21,7 +21,7 @@ func NewSessionManager() *SessionManager {
 }
 
 // GetOrCreate: gets an existing session or creates a new one
-func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession {
+func (sm *SessionManager) GetOrCreate(userID string) *UserSession {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -37,7 +37,6 @@ func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession 
 	session = &UserSession{
 		UserID:            userID,
 		SessionToken:      token,
-		Color:             color,
 		LastSeen:          now,
 		LastCursorUpdate:  time.Time{},
 		ObjectRateLimiter: rate.NewLimiter(30, 10), // 30 msg/sec, burst of 10 for objects
@@ -82,15 +81,6 @@ func (sm *SessionManager) GetSessionByToken(token string) (*UserSession, bool) {
 
 	session, sessionExists := sm.sessions[userID]
 	return session, sessionExists
-}
-
-// UpdateTokenMapping: updates the token-to-userID mapping
-// Used when overriding a session's token
-func (sm *SessionManager) UpdateTokenMapping(token string, userID string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	sm.tokenToUserID[token] = userID
 }
 
 // UpdateLastSeen: update last seen time for a user session
