@@ -1,4 +1,4 @@
-package transport
+package websocket
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"main/internal/user"
-
 	"github.com/gorilla/websocket"
 )
 
@@ -29,9 +28,9 @@ type AuthResult struct {
 	IsNewUser    bool
 }
 
-// Authenticate: completes the authentication handshake
+// completes the authentication handshake
 // Token has already been pre-validated from HTTP cookie in HandleWebSocket
-// This function just reads the client's authenticate message and returns the pre-validated data
+// reads the client's authenticate message and returns the pre-validated data
 func (a *Authenticator) Authenticate(conn *websocket.Conn, token string, timeout time.Duration) (*AuthResult, error) {
 	// Read authenticate message from client (protocol handshake)
 	conn.SetReadDeadline(time.Now().Add(timeout))
@@ -74,4 +73,53 @@ func (a *Authenticator) Authenticate(conn *websocket.Conn, token string, timeout
 		SessionToken: token, // Use the pre-generated token from HandleWebSocket
 		IsNewUser:    true,
 	}, nil
+}
+
+// authenticateConnection completes the auth handshake and creates/retrieves user session
+// Returns User object, UserSession, and error
+func authenticateConnection(
+	conn *websocket.Conn,
+	sessionToken string,
+	isNewUser bool,
+	roomCode string,
+	cfg *WebSocketConfig,
+) (*user.User, *user.UserSession, error) {
+	authResult, err := cfg.Authenticator.Authenticate(conn, sessionToken, 5*time.Second)
+	if err != nil {
+		return nil, nil, fmt.Errorf("authentication failed: %w", err)
+	}
+
+	// Override pre-validation
+	authResult.IsNewUser = isNewUser
+
+	var session *user.UserSession
+	if authResult.IsNewUser {
+		session = cfg.SessionMgr.GetOrCreate(authResult.UserID)
+		session.SessionToken = authResult.SessionToken
+	} else {
+		session, _ = cfg.SessionMgr.GetSessionByToken(authResult.SessionToken)
+	}
+
+	session.LastRoom = roomCode // Track for resumption
+
+	// Create user with session
+	u := &user.User{
+		ID:         authResult.UserID,
+		Session:    session,
+		Connection: conn,
+	}
+
+	response := map[string]interface{}{
+		"type":   "authenticated",
+		"userId": authResult.UserID,
+	}
+	responseMsg, err := json.Marshal(response)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal auth response: %w", err)
+	}
+	if err := u.WriteMessage(websocket.TextMessage, responseMsg); err != nil {
+		return nil, nil, fmt.Errorf("failed to send auth response: %w", err)
+	}
+
+	return u, session, nil
 }

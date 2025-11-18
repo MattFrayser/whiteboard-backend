@@ -18,6 +18,8 @@ import (
 	"main/internal/server"
 	"main/internal/user"
 	"main/internal/websocket"
+	"main/internal/session"
+	"main/internal/util"
 )
 
 // Dependencies holds all initialized application dependencies
@@ -25,9 +27,9 @@ type Dependencies struct {
 	SessionMgr    *user.SessionManager
 	IPRateLimiter *middleware.IPRateLimit
 	RoomMgr       *room.Manager
-	ConnRegistry  *transport.ConnectionRegistry
+	ConnRegistry  *websocket.ConnectionRegistry
 	ConnTracker   *middleware.ConnectionTracker
-	WSConfig      *transport.WebSocketConfig
+	WSConfig      *websocket.WebSocketConfig
 }
 
 // initializeDependencies initializes and wires up all application dependencies
@@ -38,29 +40,29 @@ func initializeDependencies(cfg *config.Config) *Dependencies {
 	// Initialize all managers and dependencies
 	ipRateLimiter := middleware.NewIPRateLimit()
 	connTracker := middleware.NewConnectionTracker()
-	connRegistry := transport.NewConnectionRegistry()
+	connRegistry := websocket.NewConnectionRegistry()
 	sessionMgr := user.NewSessionManager()
 	validator := object.NewValidator()
 	roomMgr := room.NewManager()
 	broadcaster := room.NewBroadcaster()
 	synchronizer := room.NewSynchronizer()
 	msgRouter := handlers.NewMessageRouter(validator, rateLimitConfig, sessionMgr, broadcaster, synchronizer)
-	authenticator := transport.NewAuthenticator(sessionMgr)
+	authenticator := websocket.NewAuthenticator(sessionMgr)
 
 	// Create WebSocket configuration with required dependencies and optional features
-	wsConfig := transport.NewWebSocketConfig(
+	wsConfig := websocket.NewWebSocketConfig(
 		cfg.AllowedDomains,
 		sessionMgr,
 		roomMgr,
 		msgRouter,
-		transport.WithIPRateLimiter(ipRateLimiter),
-		transport.WithRateLimit(rateLimitConfig),
-		transport.WithValidator(validator),
-		transport.WithSynchronizer(synchronizer),
-		transport.WithAuthenticator(authenticator),
-		transport.WithConnectionTracker(connTracker),
-		transport.WithConnectionRegistry(connRegistry),
-		transport.WithBehindProxy(cfg.BehindProxy), // Trust Proxy
+		websocket.WithIPRateLimiter(ipRateLimiter),
+		websocket.WithRateLimit(rateLimitConfig),
+		websocket.WithValidator(validator),
+		websocket.WithSynchronizer(synchronizer),
+		websocket.WithAuthenticator(authenticator),
+		websocket.WithConnectionTracker(connTracker),
+		websocket.WithConnectionRegistry(connRegistry),
+		websocket.WithBehindProxy(cfg.BehindProxy), // Trust Proxy
 	)
 
 	return &Dependencies{
@@ -181,7 +183,7 @@ func setupRoutes(cfg *config.Config, deps *Dependencies) {
 	// Session establishment endpoint (called before WebSocket connection)
 	sessionHandler := middleware.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check IP rate limit for session endpoint
-		clientIP := transport.GetClientIP(r, cfg.BehindProxy)
+		clientIP := util.GetClientIP(r, cfg.BehindProxy)
 		if !deps.IPRateLimiter.Allow(clientIP) {
 			logger.Warn("Session endpoint rate limit exceeded").
 				Str("ip", clientIP).
@@ -189,7 +191,7 @@ func setupRoutes(cfg *config.Config, deps *Dependencies) {
 			http.Error(w, "Too many requests. Please try again later.", http.StatusTooManyRequests)
 			return
 		}
-		transport.HandleSession(w, r, deps.SessionMgr, cfg.BehindProxy)
+		session.HandleSession(w, r, deps.SessionMgr, cfg.BehindProxy)
 	})
 	// Apply CORS to session endpoint for cross-origin requests
 	sessionHandlerWithCORS := middleware.WrapWithCORS(sessionHandler, cfg.AllowedDomains)
@@ -197,7 +199,7 @@ func setupRoutes(cfg *config.Config, deps *Dependencies) {
 
 	// WebSocket endpoint
 	wsHandler := middleware.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		transport.HandleWebSocket(w, r, deps.WSConfig)
+		websocket.HandleWebSocket(w, r, deps.WSConfig)
 	})
 	http.Handle("/ws", wsHandler)
 
