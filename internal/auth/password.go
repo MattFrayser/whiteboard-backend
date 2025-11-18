@@ -5,8 +5,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// HashPassword creates a bcrypt hash of the password
-// Returns empty string if password is empty
 func HashPassword(password string) (string, error) {
 	if password == "" {
 		return "", nil
@@ -20,8 +18,7 @@ func HashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
-// VerifyPassword checks if the provided password matches the hashed password
-// Uses constant-time comparison to prevent timing attacks
+// provided password matches the hashed password
 func VerifyPassword(hashedPassword, password string) bool {
 	// Empty password check
 	if hashedPassword == "" && password == "" {
@@ -34,10 +31,13 @@ func VerifyPassword(hashedPassword, password string) bool {
 
 	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 
-	// Use constant-time comparison to prevent timing attacks
+	// constant-time comparison 
+	// comapare (ok: 1/err: 0) to contant one
 	return subtle.ConstantTimeCompare([]byte{boolToByte(err == nil)}, []byte{1}) == 1
 }
 
+// if err == nil then ok -> return 1
+// err != return 0 and fail compare
 func boolToByte(b bool) byte {
 	if b {
 		return 1

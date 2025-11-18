@@ -25,23 +25,12 @@ primary_region = "iad"
   LOG_LEVEL = "info"
   BEHIND_TLS_PROXY = "true"
 
-
-[vm]
-  size = "shared-cpu-1x" 
-  memory = "256mb"       
-
-[[vm.size]]
+[[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory_mb = 256
+  swap_size_mb = 0
 
 [deploy]
   strategy = "rolling" # Zero-downtime deployments
 
-[metrics]
-  port = 9091
-  path = "/metrics"
-
-[vm]
-  # prevent memory secrets from being written to disk 
-  swap_size_mb = 0
