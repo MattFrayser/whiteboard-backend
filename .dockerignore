@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+
+# Environment files (secrets should be set via fly secrets)
+.env
+.env.*
+!.env.example
+
+# Editor configs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+tmp/
+whiteboard-server
+
+# Testing
+tests/
+*.test
+*.out
+coverage
+test-results
+
+# Documentation
+*.md
+README*
+docs/
+
+# Certificates
+certs/
+
+# Logs
+*.log
+logs/
+
+# Fly.io
+.fly
+
+# Frontend (if present in backend dir)
+frontend/node_modules
+frontend/.vite
+frontend/coverage

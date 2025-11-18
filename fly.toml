@@ -1,0 +1,47 @@
+app = "whiteboard-beta"
+primary_region = "iad" 
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0 
+  processes = ["app"]
+
+  # Health check 
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ENVIRONMENT = "production"
+  LOG_LEVEL = "info"
+  BEHIND_TLS_PROXY = "true"
+
+
+[vm]
+  size = "shared-cpu-1x" 
+  memory = "256mb"       
+
+[[vm.size]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
+
+[deploy]
+  strategy = "rolling" # Zero-downtime deployments
+
+[metrics]
+  port = 9091
+  path = "/metrics"
+
+[vm]
+  # prevent memory secrets from being written to disk 
+  swap_size_mb = 0

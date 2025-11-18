@@ -18,6 +18,7 @@ type Config struct {
 	TLSCertFile string
 	TLSKeyFile  string
 	UseTLS      bool
+	BehindProxy bool
 }
 
 // Load reads configuration from environment variables
@@ -38,6 +39,7 @@ func Load() *Config {
 	certFile := os.Getenv("TLS_CERT_FILE")
 	keyFile := os.Getenv("TLS_KEY_FILE")
 	useTLS := certFile != "" && keyFile != ""
+	behindProxy := os.Getenv("BEHIND_TLS_PROXY") == "true"
 
 	return &Config{
 		Environment:    environment,
@@ -47,5 +49,6 @@ func Load() *Config {
 		TLSCertFile: certFile,
 		TLSKeyFile:  keyFile,
 		UseTLS:      useTLS,
+		BehindProxy: behindProxy,
 	}
 }

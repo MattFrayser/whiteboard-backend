@@ -11,11 +11,11 @@ import (
 
 // New creates and configures an http.Server based on configuration
 func New(cfg *config.Config) *http.Server {
-	// Enforce TLS in production
-	if cfg.IsProduction && !cfg.UseTLS {
+	// Enforce TLS in production unless behind a proxy
+	if cfg.IsProduction && !cfg.UseTLS && !cfg.BehindProxy {
 		logger.Fatal("TLS is required in production mode").
 			Str("environment", "production").
-			Msg("Set TLS_CERT_FILE and TLS_KEY_FILE environment variables")
+			Msg("Set TLS_CERT_FILE and TLS_KEY_FILE environment variables, or set BEHIND_TLS_PROXY=true")
 	}
 
 	// Configure server address and timeouts

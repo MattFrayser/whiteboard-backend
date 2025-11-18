@@ -47,19 +47,20 @@ func initializeDependencies(cfg *config.Config) *Dependencies {
 	msgRouter := handlers.NewMessageRouter(validator, rateLimitConfig, sessionMgr, broadcaster, synchronizer)
 	authenticator := transport.NewAuthenticator(sessionMgr)
 
-	// Create WebSocket configuration with all dependencies
+	// Create WebSocket configuration with required dependencies and optional features
 	wsConfig := transport.NewWebSocketConfig(
 		cfg.AllowedDomains,
-		ipRateLimiter,
-		rateLimitConfig,
 		sessionMgr,
-		validator,
 		roomMgr,
 		msgRouter,
-		synchronizer,
-		authenticator,
-		connTracker,
-		connRegistry,
+		transport.WithIPRateLimiter(ipRateLimiter),
+		transport.WithRateLimit(rateLimitConfig),
+		transport.WithValidator(validator),
+		transport.WithSynchronizer(synchronizer),
+		transport.WithAuthenticator(authenticator),
+		transport.WithConnectionTracker(connTracker),
+		transport.WithConnectionRegistry(connRegistry),
+		transport.WithBehindProxy(cfg.BehindProxy), // Trust Proxy
 	)
 
 	return &Dependencies{
@@ -180,7 +181,7 @@ func setupRoutes(cfg *config.Config, deps *Dependencies) {
 	// Session establishment endpoint (called before WebSocket connection)
 	sessionHandler := middleware.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check IP rate limit for session endpoint
-		clientIP := transport.GetClientIP(r)
+		clientIP := transport.GetClientIP(r, cfg.BehindProxy)
 		if !deps.IPRateLimiter.Allow(clientIP) {
 			logger.Warn("Session endpoint rate limit exceeded").
 				Str("ip", clientIP).
@@ -200,16 +201,5 @@ func setupRoutes(cfg *config.Config, deps *Dependencies) {
 	})
 	http.Handle("/ws", wsHandler)
 
-	// Health check endpoint (requires authentication)
-	healthConfig := &handlers.HealthConfig{
-		SessionMgr:     deps.SessionMgr,
-		ConnRegistry:   deps.ConnRegistry,
-		RoomMgr:        deps.RoomMgr,
-		ConnTracker:    deps.ConnTracker,
-		MaxConnections: 1000,  // WebSocket connection threshold
-		MaxRooms:       100,   // Active room threshold
-		MaxHTTPConns:   1000,  // HTTP connection threshold
-	}
-	healthHandler := middleware.WrapHandlerFunc(handlers.HandleHealth(healthConfig))
-	http.Handle("/health", healthHandler)
+	http.Handle("/health", handlers.HandleHealth())
 }

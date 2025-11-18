@@ -116,22 +116,21 @@ type WebSocketConfig struct {
 	Authenticator *Authenticator
 	ConnTracker   *middleware.ConnectionTracker
 	ConnRegistry  *ConnectionRegistry
+	BehindProxy   bool
 }
 
-// NewWebSocketConfig: creates a new WebSocketConfig with upgrader configured for allowed domains
+// NewWebSocketConfig creates a new WebSocketConfig with required dependencies
+// and optional configurations via functional options.
+// Required parameters: allowedDomains, sessionMgr, roomManager, msgRouter
+// Optional parameters: use With* functions (e.g., WithIPRateLimiter, WithValidator)
 func NewWebSocketConfig(
 	allowedDomains []string,
-	ipRateLimiter *middleware.IPRateLimit,
-	rateLimit *middleware.RateLimit,
 	sessionMgr *user.SessionManager,
-	validator *object.Validator,
 	roomManager *room.Manager,
 	msgRouter *handlers.MessageRouter,
-	synchronizer *room.Synchronizer,
-	authenticator *Authenticator,
-	connTracker *middleware.ConnectionTracker,
-	connRegistry *ConnectionRegistry,
+	opts ...WebSocketConfigOption,
 ) *WebSocketConfig {
+	// Create upgrader with security settings
 	upgrader := &websocket.Upgrader{
 		ReadBufferSize:    4096, // 4KB read buffer
 		WriteBufferSize:   4096, // 4KB write buffer
@@ -152,40 +151,47 @@ func NewWebSocketConfig(
 		},
 	}
 
-	return &WebSocketConfig{
-		Upgrader:      upgrader,
-		IPRateLimiter: ipRateLimiter,
-		RateLimit:     rateLimit,
-		SessionMgr:    sessionMgr,
-		Validator:     validator,
-		RoomManager:   roomManager,
-		MsgRouter:     msgRouter,
-		Synchronizer:  synchronizer,
-		Authenticator: authenticator,
-		ConnTracker:   connTracker,
-		ConnRegistry:  connRegistry,
+	// Initialize config with required fields
+	cfg := &WebSocketConfig{
+		Upgrader:    upgrader,
+		SessionMgr:  sessionMgr,
+		RoomManager: roomManager,
+		MsgRouter:   msgRouter,
 	}
+
+	// Apply optional configurations
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	return cfg
 }
 
 // GetClientIP: extracts the real client IP from the request
 // Handles proxy environments by checking X-Forwarded-For and X-Real-IP headers
-func GetClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (set by proxies like nginx, Cloudflare)
-	// Format: X-Forwarded-For: client, proxy1, proxy2
-	// We want the first IP (the original client)
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		// Take the first IP in the chain (client's real IP)
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+func GetClientIP(r *http.Request, behindProxy bool) string {
+	if behindProxy {
+		// most trustworthy source when running on Fly.io
+		if flyIP := r.Header.Get("Fly-Client-IP"); flyIP != "" {
+			return strings.TrimSpace(flyIP)
 		}
-	}
 
-	// Check X-Real-IP header (used by some proxies)
-	xri := r.Header.Get("X-Real-IP")
-	if xri != "" {
-		return strings.TrimSpace(xri)
+		// X-Forwarded-For header (set by proxies like nginx, Cloudflare)
+		// We want the first IP (the original client)
+		// Only trust this when behind a known proxy!
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			ips := strings.Split(xff, ",")
+			if len(ips) > 0 {
+				return strings.TrimSpace(ips[0])
+			}
+
+
+		}
+		// Check X-Real-IP header (used by some proxies)
+		// Only trust this when behind a known proxy!
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return strings.TrimSpace(xri)
+		}	
 	}
 
 	// Fallback to RemoteAddr (direct connection, no proxy)
@@ -297,7 +303,7 @@ func handleCreateRoom(roomCode string, userID string, msgData map[string]interfa
 // Returns error if limits are exceeded
 func checkConnectionLimits(r *http.Request, cfg *WebSocketConfig) error {
 	// Check if rate limited
-	clientIP := GetClientIP(r)
+	clientIP := GetClientIP(r, cfg.BehindProxy)
 	if !cfg.IPRateLimiter.Allow(clientIP) {
 		logger.Warn("Rate limit exceeded for IP").
 			Str("ip", clientIP).
