@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -15,14 +16,16 @@ type ipLimiterEntry struct {
 
 // IPRateLimit: manages rate limiters per IP address
 type IPRateLimit struct {
-	limiters map[string]*ipLimiterEntry
-	mu       sync.RWMutex
+	limiters   map[string]*ipLimiterEntry
+	mu         sync.RWMutex
+	maxEntries int
 }
 
 // NewIPRateLimit: creates a new IPRateLimit
 func NewIPRateLimit() *IPRateLimit {
 	return &IPRateLimit{
 		limiters: make(map[string]*ipLimiterEntry),
+		maxEntries: 10000, 
 	}
 }
 
@@ -33,6 +36,10 @@ func (iprl *IPRateLimit) Allow(ip string) bool {
 
 	entry, exists := iprl.limiters[ip]
 	if !exists {
+		if len(iprl.limiters) >= iprl.maxEntries {
+			iprl.evictOldest()
+		}
+
 		// New IP: 10 connections per minute, burst of 5
 		entry = &ipLimiterEntry{
 			limiter:  rate.NewLimiter(rate.Every(6*time.Second), 5),
@@ -45,6 +52,31 @@ func (iprl *IPRateLimit) Allow(ip string) bool {
 	}
 
 	return entry.limiter.Allow()
+}
+
+// remove 10% when full
+func (iprl *IPRateLimit) evictOldest() {
+	toRemove := iprl.maxEntries / 10
+	
+	type entry struct {
+		ip       string
+		lastSeen time.Time
+	}
+	entries := make([]entry, 0, len(iprl.limiters))
+	
+	for ip, e := range iprl.limiters {
+		entries = append(entries, entry{ip: ip, lastSeen: e.lastSeen})
+	}
+	
+	// Sort by lastSeen (oldest first)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].lastSeen.Before(entries[j].lastSeen)
+	})
+	
+	// Remove oldest 10%
+	for i := 0; i < toRemove && i < len(entries); i++ {
+		delete(iprl.limiters, entries[i].ip)
+	}
 }
 
 // Cleanup: removes old IP limiters that haven't been used recently

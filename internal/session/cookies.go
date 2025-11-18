@@ -34,10 +34,10 @@ func isSecureConnection(r *http.Request, behindProxy bool) bool {
 		return false
 	}
  
-	// Check Fly.io proxy header
-	if r.Header.Get("Fly-Client-IP") != "" {
-		return true
-	}
+	// Only use if behind trusted proxy
+    	if r.Header.Get("X-Forwarded-Proto") == "https" {
+        	return true
+    	}
  
 	return false
 }

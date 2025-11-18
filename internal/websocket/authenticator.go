@@ -95,12 +95,11 @@ func authenticateConnection(
 	var session *user.UserSession
 	if authResult.IsNewUser {
 		session = cfg.SessionMgr.GetOrCreate(authResult.UserID)
-		session.SessionToken = authResult.SessionToken
 	} else {
 		session, _ = cfg.SessionMgr.GetSessionByToken(authResult.SessionToken)
 	}
 
-	session.LastRoom = roomCode // Track for resumption
+	cfg.SessionMgr.UpdateLastRoom(authResult.UserID, roomCode)
 
 	// Create user with session
 	u := &user.User{

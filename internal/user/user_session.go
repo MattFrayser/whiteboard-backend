@@ -48,7 +48,7 @@ func (sm *SessionManager) GetOrCreate(userID string) *UserSession {
 	return session
 }
 
-// ValidateToken: validate session token and returns the associated userID
+// validate session token and returns the associated userID
 func (sm *SessionManager) ValidateToken(token string) (string, bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -69,7 +69,6 @@ func (sm *SessionManager) ValidateToken(token string) (string, bool) {
 	return userID, true
 }
 
-// GetSessionByToken: retrieve session by token
 func (sm *SessionManager) GetSessionByToken(token string) (*UserSession, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -83,7 +82,7 @@ func (sm *SessionManager) GetSessionByToken(token string) (*UserSession, bool) {
 	return session, sessionExists
 }
 
-// UpdateLastSeen: update last seen time for a user session
+//  update last seen time for a user session
 func (sm *SessionManager) UpdateLastSeen(userID string, lastSeen time.Time) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -93,7 +92,7 @@ func (sm *SessionManager) UpdateLastSeen(userID string, lastSeen time.Time) {
 	}
 }
 
-// LastSeen: gets the last seen time for a user session
+//  gets the last seen time for a user session
 func (sm *SessionManager) LastSeen(userID string) (time.Time, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -104,7 +103,6 @@ func (sm *SessionManager) LastSeen(userID string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// LastCursor: gets the last cursor update time for a user session
 func (sm *SessionManager) LastCursor(userID string) (time.Time, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -115,7 +113,6 @@ func (sm *SessionManager) LastCursor(userID string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// UpdateLastCursor: updates the last cursor update time for a user session
 func (sm *SessionManager) UpdateLastCursor(userID string, lastCursorUpdate time.Time) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -125,7 +122,16 @@ func (sm *SessionManager) UpdateLastCursor(userID string, lastCursorUpdate time.
 	}
 }
 
-// Remove:  removes a user session (called on disconnect)
+func (sm *SessionManager) UpdateLastRoom(userID string, roomCode string) {
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    if session, exists := sm.sessions[userID]; exists {
+        session.LastRoom = roomCode
+    }
+}
+
+// removes a user session (called on disconnect)
 func (sm *SessionManager) Remove(userID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -138,7 +144,6 @@ func (sm *SessionManager) Remove(userID string) {
 	delete(sm.sessions, userID)
 }
 
-// Cleanup: removes expired user sessions
 func (sm *SessionManager) Cleanup() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

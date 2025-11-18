@@ -43,12 +43,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, cfg *WebSocketConfi
 		return
 	}
  
-	defer func() {
-		if cfg.ConnTracker != nil {
-			cfg.ConnTracker.Disconnect()
-		}
-	}()
- 
 	// Create cancellable context for this connection (for graceful shutdown)
 	connCtx, connCancel := context.WithCancel(context.Background())
 	defer connCancel()
