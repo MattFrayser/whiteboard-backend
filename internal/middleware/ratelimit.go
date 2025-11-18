@@ -60,6 +60,8 @@ func (rl *RateLimit) ValidateMessageSize(msgSize int) bool {
 
 // ValidateObjectComplexity: validates object data complexity
 // Checks nesting depth and unique key count (not array lengths)
+// Protect against malicious deep nested objects
+// O(n), n = total keys in object, 
 func (rl *RateLimit) ValidateObjectComplexity(data map[string]interface{}) error {
 	depth, keys := validateComplexity(data, 0)
 
@@ -74,7 +76,7 @@ func (rl *RateLimit) ValidateObjectComplexity(data map[string]interface{}) error
 	return nil
 }
 
-// validateComplexity: recursively checks depth and counts unique keys
+// helper to recursively check depth and counts unique keys
 func validateComplexity(data interface{}, currentDepth int) (int, int) {
 	maxDepth := currentDepth
 	keyCount := 0

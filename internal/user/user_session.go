@@ -51,8 +51,8 @@ func (sm *SessionManager) GetOrCreate(userID string, color string) *UserSession 
 
 // ValidateToken: validate session token and returns the associated userID
 func (sm *SessionManager) ValidateToken(token string) (string, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
 	userID, exists := sm.tokenToUserID[token]
 	if !exists {

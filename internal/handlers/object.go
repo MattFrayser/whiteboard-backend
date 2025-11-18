@@ -95,6 +95,16 @@ func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string
 		return fmt.Errorf("missing or invalid object data", objectMsg)
 	}
 
+	if err := h.config.ValidateObjectComplexity(objData); err != nil {
+		h.sendErrorAck(u, id, "object too complex")
+		logger.Warn("Object complexity validation failed").
+			Str("user_id", u.ID).
+			Str("object", id).
+			Err(err).
+			Msg("")
+		return fmt.Errorf("object complexity validation failed: %w", err)
+	}
+
 	// Validate and sanitize object data using schema validation
 	sanitizedData, err := h.validator.ValidateAndSanitize(objType, objData)
 	if err != nil {
@@ -179,6 +189,16 @@ func (h *ObjectHandler) HandleUpdated(rm *room.Room, u *user.User, data map[stri
 	objData, ok := objectMsg["data"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("missing or invalid object data")
+	}
+
+	if err := h.config.ValidateObjectComplexity(objData); err != nil {
+		h.sendErrorAck(u, id, "object too complex")
+		logger.Warn("Object complexity validation failed").
+			Str("user_id", u.ID).
+			Str("object", id).
+			Err(err).
+			Msg("")
+		return fmt.Errorf("object complexity validation failed: %w", err)
 	}
 
 	// Get the existing object to determine its type

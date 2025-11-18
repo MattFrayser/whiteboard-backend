@@ -31,14 +31,16 @@ type User struct {
 	WriteMutex sync.Mutex 
 }
 
-// GenerateUUID: generate random UUID for user identification
+// panic on crypto/rand fail
+// used for user identification
 func GenerateUUID() string {
 	bytes := make([]byte, 16)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		panic("Crypto/rand failed: " + err.Error())
+	}
 	return hex.EncodeToString(bytes)
 }
 
-// GenerateSessionToken: generates session token
 func GenerateSessionToken() string {
 	bytes := make([]byte, 32) // 256-bit token
 	if _, err := rand.Read(bytes); err != nil {
