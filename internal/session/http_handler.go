@@ -9,8 +9,9 @@ import (
 // Establish a session and set session cookie
 // should be called by the frontend BEFORE opening a WebSocket connection
 func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.SessionManager, behindProxy bool) {
+
 	// Only allow GET requests
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

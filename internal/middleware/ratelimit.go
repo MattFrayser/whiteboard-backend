@@ -27,7 +27,7 @@ const (
 	maxMessageSize 	  = 250000
 	maxRooms	  = 100
 	maxObjectDepth    = 5
-	maxObjectElements = 100
+	maxObjectElements = 5000 // counts points so this adds up fast
 	messagesPerSecond = 30
 	burstSize	  = 10
 )
@@ -58,7 +58,6 @@ func (rl *RateLimit) ValidateMessageSize(msgSize int) bool {
 	return msgSize <= rl.MaxMessageSize
 }
 
-// ValidateObjectComplexity: validates object data complexity
 // Checks nesting depth and unique key count (not array lengths)
 // Protect against malicious deep nested objects
 // O(n), n = total keys in object, 

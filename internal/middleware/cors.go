@@ -5,17 +5,18 @@ import (
 	"strings"
 )
 
-
+// CORS middleware adds CORS headers for cross-origin requests
 type CORS struct {
-    allowedOrigins map[string]bool 
+	next           http.Handler
+	allowedOrigins []string
 }
 
-func NewCORS(origins []string) *CORS {
-    allowed := make(map[string]bool)
-    for _, origin := range origins {
-        allowed[strings.TrimSpace(origin)] = true
-    }
-    return &CORS{allowedOrigins: allowed}
+// NewCORS creates a new CORS middleware
+func NewCORS(next http.Handler, allowedOrigins []string) *CORS {
+	return &CORS{
+		next:           next,
+		allowedOrigins: allowedOrigins,
+	}
 }
 
 // ServeHTTP implements the http.Handler interface
@@ -23,7 +24,13 @@ func (c *CORS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
 
 	// Check if origin is allowed
-	allowed := c.allowedOrigins[origin]
+	allowed := false
+	for _, allowedOrigin := range c.allowedOrigins {
+		if origin == strings.TrimSpace(allowedOrigin) {
+			allowed = true
+			break
+		}
+	}
 
 	if allowed {
 		// Set CORS headers
@@ -40,9 +47,12 @@ func (c *CORS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if c.next != nil {
+		c.next.ServeHTTP(w, r)
+	}
 }
 
 // WrapWithCORS wraps an http.Handler with CORS headers
 func WrapWithCORS(handler http.Handler, allowedOrigins []string) http.Handler {
-	return NewCORS(allowedOrigins)
+	return NewCORS(handler, allowedOrigins)
 }
