@@ -41,6 +41,7 @@ func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocke
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var failedUsers []*user.User
+	successCount := 0
 
 	for _, u := range users {
 		wg.Add(1)
@@ -54,6 +55,10 @@ func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocke
 					Msg("")
 				mu.Lock()
 				failedUsers = append(failedUsers, usr)
+				mu.Unlock()
+			} else {
+				mu.Lock()
+				successCount++
 				mu.Unlock()
 			}
 		}(u)
@@ -69,3 +74,4 @@ func (b *Broadcaster) Broadcast(rm RoomConnections, msg []byte, sender *websocke
 		u.Connection.Close()
 	}
 }
+

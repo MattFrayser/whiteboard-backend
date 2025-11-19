@@ -23,10 +23,17 @@ func (s *Synchronizer) SyncNewUser(rm *Room, u *user.User) error {
 	// Build list of objects to sync
 	objects := make([]map[string]interface{}, 0, len(rm.Objects))
 	for _, obj := range rm.Objects {
+		dataWithMeta := make(map[string]interface{})
+		for k, v := range obj.Data {
+			dataWithMeta[k] = v
+		}
+		dataWithMeta["id"] = obj.ID
+		dataWithMeta["type"] = obj.Type
+ 
 		objects = append(objects, map[string]interface{}{
 			"id":     obj.ID,
 			"type":   obj.Type,
-			"data":   obj.Data,
+			"data":   dataWithMeta,
 			"userId": obj.UserID,
 			"zIndex": obj.ZIndex,
 		})

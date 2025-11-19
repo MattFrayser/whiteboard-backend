@@ -131,10 +131,25 @@ func (h *ObjectHandler) HandleAdded(rm *room.Room, u *user.User, data map[string
 	rm.AddObject(obj)
 
 	// Update the data object with sanitized data for broadcast
-	objectMsg["data"] = sanitizedData
+	dataWithMeta := make(map[string]interface{})
+	for k, v := range sanitizedData {
+		dataWithMeta[k] = v
+	}
+	dataWithMeta["id"] = id
+	dataWithMeta["type"] = objType
+
+	// Update the data object with sanitized data for broadcast
+	objectMsg["data"] = dataWithMeta
 	objectMsg["id"] = id
+	objectMsg["type"] = objType
+	objectMsg["zIndex"] = int(zIndexFloat)
 	data["object"] = objectMsg
 	data["userId"] = u.ID
+
+	logger.Debug("Broadcasting objectAdded").
+		Str("objectId", id).
+		Str("objectType", objType).
+		Msg("")
 
 	// Broadcast to other users
 	msg, err := json.Marshal(data)
@@ -217,8 +232,15 @@ func (h *ObjectHandler) HandleUpdated(rm *room.Room, u *user.User, data map[stri
 	rm.UpdateObject(id, sanitizedData)
 
 	// Update the data object with sanitized data for broadcast
-	objectMsg["data"] = sanitizedData
+	dataWithMeta := make(map[string]interface{})
+	for k, v := range sanitizedData {
+		dataWithMeta[k] = v
+	}
+	dataWithMeta["id"] = id
+	dataWithMeta["type"] = existingObj.Type
+	objectMsg["data"] = dataWithMeta
 	objectMsg["id"] = id
+	objectMsg["type"] = existingObj.Type
 	data["object"] = objectMsg
 	data["userId"] = u.ID
 

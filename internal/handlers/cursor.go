@@ -1,4 +1,4 @@
-package handlers 
+package handlers
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 	"main/internal/room"
 	"main/internal/user"
 )
-
 
 // User session cursor functions
 type SessionProvider interface {
