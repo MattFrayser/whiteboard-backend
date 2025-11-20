@@ -1,18 +1,18 @@
 package handlers
- 
+
 import (
 	"encoding/json"
 	"fmt"
+	"main/internal/auth"
 	"main/internal/logger"
 	"main/internal/middleware"
 	"main/internal/room"
 	"main/internal/user"
 	"time"
- 
+
 	"github.com/gorilla/websocket"
 )
- 
- 
+
 // Room creation with settings (password, permissions)
 // Called when client sends createRoom message after authentication
 func HandleCreateRoom(roomCode string, userID string, msgData map[string]interface{}, roomManager *room.Manager, rateLimit *middleware.RateLimit) error {
@@ -26,7 +26,11 @@ func HandleCreateRoom(roomCode string, userID string, msgData map[string]interfa
 	}
  
 	if password, ok := msgData["password"].(string); ok && password != "" {
-		settings.Password = password
+		hashPasword, err := auth.HashPassword(password)
+		if err != nil {
+			return fmt.Errorf("failed to hash password: %w", err)
+		}
+		settings.Password = hashPasword
 	}
  
 	// Extract permissions if provided

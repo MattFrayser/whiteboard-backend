@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"crypto/subtle"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -30,17 +29,7 @@ func VerifyPassword(hashedPassword, password string) bool {
 	}
 
 	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
-
-	// constant-time comparison 
-	// comapare (ok: 1/err: 0) to contant one
-	return subtle.ConstantTimeCompare([]byte{boolToByte(err == nil)}, []byte{1}) == 1
+	return err == nil
 }
 
-// if err == nil then ok -> return 1
-// err != return 0 and fail compare
-func boolToByte(b bool) byte {
-	if b {
-		return 1
-	}
-	return 0
-}
+

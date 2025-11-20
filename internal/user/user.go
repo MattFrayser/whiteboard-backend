@@ -14,11 +14,13 @@ import (
 type UserSession struct {
 	UserID             string
 	SessionToken       string
+	CSRFToken	   string
 	LastRoom           string
 	LastSeen           time.Time
 	LastCursorUpdate   time.Time
 	ObjectRateLimiter  *rate.Limiter
 	CursorRateLimiter  *rate.Limiter
+	Color              string
 	VerifiedRooms      map[string]time.Time // roomCode -> verification time (for password-protected rooms)
 }
 
@@ -30,7 +32,9 @@ type User struct {
 	WriteMutex sync.Mutex 
 }
 
-// panic on crypto/rand fail
+// panic on crypto/rand fail, need to restart anyways and currently
+// cleaning up isnt a huge concern
+
 // used for user identification
 func GenerateUUID() string {
 	bytes := make([]byte, 16)

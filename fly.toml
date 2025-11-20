@@ -1,36 +1,36 @@
-app = "whiteboard-beta"
-primary_region = "iad" 
+# fly.toml app configuration file generated for whiteboard-ts-matt on 2025-11-20T14:17:23-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'whiteboard-ts-matt'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[deploy]
+  strategy = 'rolling'
+
+[env]
+  BEHIND_TLS_PROXY = 'true'
+  ENVIRONMENT = 'production'
+  LOG_LEVEL = 'info'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0 
-  processes = ["app"]
+  min_machines_running = 0
+  processes = ['app']
 
-  # Health check 
   [[http_service.checks]]
-    grace_period = "10s"
-    interval = "30s"
-    method = "GET"
-    timeout = "5s"
-    path = "/health"
-
-[build]
-  dockerfile = "Dockerfile"
-
-[env]
-  ENVIRONMENT = "production"
-  LOG_LEVEL = "info"
-  BEHIND_TLS_PROXY = "true"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
 
 [[vm]]
-  cpu_kind = "shared"
-  cpus = 1
-  memory_mb = 256
-  swap_size_mb = 0
-
-[deploy]
-  strategy = "rolling" # Zero-downtime deployments
-
+  size = 'shared-cpu-1x'

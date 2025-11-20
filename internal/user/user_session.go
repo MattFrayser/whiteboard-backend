@@ -34,9 +34,11 @@ func (sm *SessionManager) GetOrCreate(userID string) *UserSession {
 	// Create new session with generated token
 	now := time.Now()
 	token := GenerateSessionToken()
+	csrfToken := GenerateSessionToken()
 	session = &UserSession{
 		UserID:            userID,
 		SessionToken:      token,
+		CSRFToken:    	   csrfToken,
 		LastSeen:          now,
 		LastCursorUpdate:  time.Time{},
 		ObjectRateLimiter: rate.NewLimiter(30, 10), // 30 msg/sec, burst of 10 for objects
@@ -49,24 +51,24 @@ func (sm *SessionManager) GetOrCreate(userID string) *UserSession {
 }
 
 // validate session token and returns the associated userID
-func (sm *SessionManager) ValidateToken(token string) (string, bool) {
+func (sm *SessionManager) ValidateToken(token string) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	userID, exists := sm.tokenToUserID[token]
 	if !exists {
-		return "", false
+		return false
 	}
 
 	// Verify the session still exists
 	session, sessionExists := sm.sessions[userID]
 	if !sessionExists {
-		return "", false
+		return false
 	}
 
 	// Update last seen
 	session.LastSeen = time.Now()
-	return userID, true
+	return true
 }
 
 func (sm *SessionManager) GetSessionByToken(token string) (*UserSession, bool) {

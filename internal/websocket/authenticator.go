@@ -9,19 +9,16 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Authenticator: handles WebSocket authentication
 type Authenticator struct {
 	sessionMgr *user.SessionManager
 }
 
-// NewAuthenticator: creates a new authenticator
 func NewAuthenticator(sessionMgr *user.SessionManager) *Authenticator {
 	return &Authenticator{
 		sessionMgr: sessionMgr,
 	}
 }
 
-// AuthResult contains the results of authentication
 type AuthResult struct {
 	UserID       string
 	SessionToken string
@@ -41,7 +38,9 @@ func (a *Authenticator) Authenticate(conn *websocket.Conn, token string, timeout
 	conn.SetReadDeadline(time.Time{}) // Clear timeout
 
 	var authMsg struct {
-		Type string `json:"type"`
+		Type 	  string `json:"type"`
+		CSRFToken string `json:"csrfToken"`
+		
 	}
 
 	if err := json.Unmarshal(msg, &authMsg); err != nil {
@@ -52,31 +51,37 @@ func (a *Authenticator) Authenticate(conn *websocket.Conn, token string, timeout
 		return nil, fmt.Errorf("expected authenticate message, got: %s", authMsg.Type)
 	}
 
-	// Token was already validated in HandleWebSocket, so we trust it here
+	// Token already validated in HandleWebSocket, so we trust it
 	// Check if this is a returning user with existing session
 	if token != "" {
-		userID, valid := a.sessionMgr.ValidateToken(token)
-		if valid {
+		session, exists := a.sessionMgr.GetSessionByToken(token)  // ← Single lookup
+		if exists {
+			// Validate CSRF token
+			if authMsg.CSRFToken == "" || authMsg.CSRFToken != session.CSRFToken {
+				return nil, fmt.Errorf("invalid or missing CSRF token")
+			}
+
+			a.sessionMgr.UpdateLastSeen(session.UserID, time.Now())
+
 			// Returning user with valid session
 			return &AuthResult{
-				UserID:       userID,
+				UserID:       session.UserID,  
 				SessionToken: token,
 				IsNewUser:    false,
 			}, nil
 		}
 	}
 
-	// New user - token will be added to session manager after this returns
+	// New user 
 	userID := user.GenerateUUID()
 	return &AuthResult{
 		UserID:       userID,
-		SessionToken: token, // Use the pre-generated token from HandleWebSocket
+		SessionToken: token, // pre-generated token from HandleWebSocket
 		IsNewUser:    true,
 	}, nil
 }
 
-// authenticateConnection completes the auth handshake and creates/retrieves user session
-// Returns User object, UserSession, and error
+// completes the auth handshake and creates/retrieves user session
 func authenticateConnection(
 	conn *websocket.Conn,
 	sessionToken string,

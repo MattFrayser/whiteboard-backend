@@ -19,8 +19,7 @@ func EstablishSession(r *http.Request, w http.ResponseWriter, sessionMgr *user.S
 	var isNewUser bool
  
 	if existingToken != "" {
-		_, valid := sessionMgr.ValidateToken(existingToken)
-		if valid {
+		if sessionMgr.ValidateToken(existingToken) {
 			sessionToken = existingToken
 			isNewUser = false
 		} else {

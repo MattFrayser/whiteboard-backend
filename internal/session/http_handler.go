@@ -1,17 +1,18 @@
 package session
- 
+
 import (
 	"encoding/json"
 	"main/internal/user"
 	"net/http"
+	"time"
 )
- 
+
 // Establish a session and set session cookie
 // should be called by the frontend BEFORE opening a WebSocket connection
 func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.SessionManager, behindProxy bool) {
 
 	// Only allow GET requests
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -25,32 +26,28 @@ func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.Sess
  
 	var sessionToken string
 	var userID string
-	var isNewUser bool
+	var session *user.UserSession
  
 	if existingToken != "" {
-		// Validate existing token
-		validUserID, valid := sessionMgr.ValidateToken(existingToken)
-		if valid {
+		var exists bool
+		session, exists = sessionMgr.GetSessionByToken(existingToken)
+		if exists {
 			sessionToken = existingToken
-			userID = validUserID
-			isNewUser = false
+			userID = session.UserID  
+			sessionMgr.UpdateLastSeen(session.UserID, time.Now())
 		} else {
-			sessionToken = user.GenerateSessionToken()
+			// Invalid token -> new session
 			userID = user.GenerateUUID()
-			isNewUser = true
+			session = sessionMgr.GetOrCreate(userID)
+			session.SessionToken = sessionToken
 		}
 	} else {
-		// No existing token, create new one
-		sessionToken = user.GenerateSessionToken()
+		// No token -> create new one
 		userID = user.GenerateUUID()
-		isNewUser = true
-	}
- 
-	// Create or update session
-	if isNewUser {
-		session := sessionMgr.GetOrCreate(userID)
+		session = sessionMgr.GetOrCreate(userID)
 		session.SessionToken = sessionToken
 	}
+ 
  
 	// Set cookie
 	isSecure := isSecureConnection(r, behindProxy)
@@ -60,6 +57,7 @@ func HandleSession(w http.ResponseWriter, r *http.Request, sessionMgr *user.Sess
 	response := map[string]interface{}{
 		"success": true,
 		"userId":  userID,
+		"csrfToken": session.CSRFToken,
 	}
 	json.NewEncoder(w).Encode(response)
 }
